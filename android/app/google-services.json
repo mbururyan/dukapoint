@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "648334848702",
+    "project_id": "dukapoint1",
+    "storage_bucket": "dukapoint1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:648334848702:android:04702a6dcefd8fafc424ef",
+        "android_client_info": {
+          "package_name": "com.ryanmburu.dukapoint"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDjXW5Jl04UKmJV5vo8dd5zmkn4I35yFwo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
