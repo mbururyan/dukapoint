@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../services/session_service.dart';
 import '../../theme/app_theme.dart';
 import 'staff_screen.dart';
+import 'stock_history_screen.dart';
 
 /// The owner area's landing page. For now just a menu; the sales
 /// dashboard (wireframe 9) fills the top of this screen in step 8.
@@ -39,6 +40,14 @@ class OwnerHome extends StatelessWidget {
           subtitle: 'Add, deactivate, reset PINs',
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => const StaffScreen()),
+          ),
+        ),
+        _MenuTile(
+          icon: Icons.history,
+          title: 'Stock history',
+          subtitle: 'Deliveries and corrections, with who did them',
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const StockHistoryScreen()),
           ),
         ),
         // Only shown when a cashier is on shift and the owner unlocked this

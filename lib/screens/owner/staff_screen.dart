@@ -66,7 +66,9 @@ class _StaffRow extends StatelessWidget {
   String get _status {
     if (!staff.active) return 'Deactivated';
     final role = staff.isOwner ? 'Owner' : 'Cashier';
-    return staff.hasPin ? '$role · PIN set' : '$role · sets PIN at first sign-in';
+    final pin = staff.hasPin ? 'PIN set' : 'sets PIN at first sign-in';
+    final products = (!staff.isOwner && staff.canManageProducts) ? ' · manages products' : '';
+    return '$role · $pin$products';
   }
 
   @override
@@ -125,6 +127,11 @@ class _StaffMenu extends StatelessWidget {
       tooltip: 'Options for ${staff.name}',
       onSelected: (action) => _handle(context, action),
       itemBuilder: (_) => [
+        if (staff.active)
+          PopupMenuItem(
+            value: 'products',
+            child: Text(staff.canManageProducts ? 'Remove product access' : 'Allow managing products'),
+          ),
         if (staff.active && staff.hasPin) const PopupMenuItem(value: 'reset', child: Text('Reset PIN')),
         if (staff.active) const PopupMenuItem(value: 'deactivate', child: Text('Deactivate')),
         if (!staff.active) const PopupMenuItem(value: 'reactivate', child: Text('Reactivate')),
@@ -135,6 +142,17 @@ class _StaffMenu extends StatelessWidget {
   Future<void> _handle(BuildContext context, String action) async {
     final session = SessionService.instance;
     final messenger = ScaffoldMessenger.of(context);
+
+    if (action == 'products') {
+      final allow = !staff.canManageProducts;
+      session.setCanManageProducts(staff, allow);
+      messenger.showSnackBar(SnackBar(
+        content: Text(allow
+            ? '${staff.name} can now add and edit products.'
+            : '${staff.name} can no longer change products.'),
+      ));
+      return;
+    }
 
     if (action == 'reactivate') {
       session.setActive(staff, true);

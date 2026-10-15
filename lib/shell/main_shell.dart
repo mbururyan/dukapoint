@@ -1,9 +1,12 @@
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
 import '../screens/owner/owner_gate.dart';
+import '../screens/products/products_screen.dart';
+import '../screens/sell/sell_screen.dart';
+import '../services/cart_service.dart';
 import '../services/session_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/format.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -13,15 +16,41 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
+  static const _sellTab = 0;
   static const _ownerTab = 3;
 
-  int _index = 0;
+  int _index = _sellTab;
 
   void _selectTab(int i) {
     // Leaving the Owner tab re-locks it, so an owner who unlocked it
     // during a cashier's shift can't forget and leave it open.
     if (_index == _ownerTab && i != _ownerTab) SessionService.instance.lockOwner();
+    // Close the keyboard from another tab's search box, so the scanner
+    // gun's keystrokes go to the Sell screen instead.
+    FocusManager.instance.primaryFocus?.unfocus();
     setState(() => _index = i);
+  }
+
+  /// Switching cashier clears the cart (a sale belongs to whoever rings it
+  /// up), so warn first if there's something in it.
+  Future<void> _switchCashier() async {
+    final cart = CartService.instance;
+    if (!cart.isEmpty) {
+      final yes = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('Switch cashier?'),
+          content: Text('The cart (${cart.itemCount} items, ${ksh(cart.total)}) will be cleared.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Keep selling')),
+            TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Switch')),
+          ],
+        ),
+      );
+      if (yes != true) return;
+    }
+    cart.clear();
+    SessionService.instance.endShift();
   }
 
   @override
@@ -38,29 +67,19 @@ class _MainShellState extends State<MainShell> {
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
-            child: _ShiftChip(
-              name: session.current?.name ?? '',
-              // Ending the shift swaps this whole shell for the PIN screen,
-              // so anything held in these widgets is thrown away. That's why
-              // step 4 keeps the cart in a service, not in a screen.
-              onTap: session.endShift,
-            ),
+            child: _ShiftChip(name: session.current?.name ?? '', onTap: _switchCashier),
           ),
         ],
       ),
       // IndexedStack, not swapping widgets: a cashier who peeks at Sales
-      // mid-sale must come back to the same cart, not an empty one.
+      // mid-sale must come back to the same screen state.
       body: SafeArea(
         child: IndexedStack(
           index: _index,
           children: [
-            _Placeholder(
-              title: 'Sell',
-              note: 'Scanner + cart arrive in step 4',
-              footer: 'Firebase project: ${Firebase.app().options.projectId}',
-            ),
+            SellScreen(active: _index == _sellTab),
             const _Placeholder(title: 'Sales', note: 'Sales history arrives in step 7'),
-            const _Placeholder(title: 'Products', note: 'Product list + scanning arrive in step 3'),
+            const ProductsScreen(),
             const OwnerGate(),
           ],
         ),
@@ -131,11 +150,10 @@ class _ShiftChip extends StatelessWidget {
 }
 
 class _Placeholder extends StatelessWidget {
-  const _Placeholder({required this.title, required this.note, this.footer});
+  const _Placeholder({required this.title, required this.note});
 
   final String title;
   final String note;
-  final String? footer;
 
   @override
   Widget build(BuildContext context) {
@@ -147,17 +165,6 @@ class _Placeholder extends StatelessWidget {
           Text(title, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           Text(note, style: const TextStyle(fontSize: 16, color: AppColors.inkSoft)),
-          if (footer != null) ...[
-            const Spacer(),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppColors.successBg,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(footer!, style: AppTheme.mono(size: 13, color: AppColors.success)),
-            ),
-          ],
         ],
       ),
     );

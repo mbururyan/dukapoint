@@ -10,6 +10,7 @@ class Staff {
     required this.role,
     required this.pinHash,
     required this.active,
+    required this.canManageProducts,
   });
 
   final String id;
@@ -17,6 +18,8 @@ class Staff {
   final String role; // 'owner' | 'cashier'
   final String? pinHash; // null until the person sets a PIN on first use
   final bool active;
+  // Set by the owner per trusted cashier. Owners always can.
+  final bool canManageProducts;
 
   bool get isOwner => role == 'owner';
   bool get hasPin => pinHash != null && pinHash!.isNotEmpty;
@@ -31,6 +34,8 @@ class Staff {
       // Missing 'active' counts as active, so a console doc without the
       // field still shows up instead of silently disappearing.
       active: (d['active'] as bool?) ?? true,
+      // Missing = false: a new hire can't touch prices until the owner says so.
+      canManageProducts: (d['canManageProducts'] as bool?) ?? false,
     );
   }
 }

@@ -13,6 +13,7 @@ class Shop {
     required this.receiptFooter,
     required this.status,
     required this.paidUntil,
+    required this.suppliers,
   });
 
   final String id;
@@ -23,6 +24,9 @@ class Shop {
   final String receiptFooter;
   final String status; // 'active' | 'suspended'
   final DateTime? paidUntil;
+  // Supplier names used on past deliveries (FCL, Unga, De Heus...), offered
+  // as suggestions so the same supplier isn't typed five different ways.
+  final List<String> suppliers;
 
   bool get isActive => status == 'active';
 
@@ -38,6 +42,7 @@ class Shop {
       receiptFooter: (d['receiptFooter'] as String?) ?? '',
       status: (d['status'] as String?) ?? 'suspended',
       paidUntil: (d['paidUntil'] as Timestamp?)?.toDate(),
+      suppliers: ((d['suppliers'] as List?) ?? const []).whereType<String>().toList()..sort(),
     );
   }
 }

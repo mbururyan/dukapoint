@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 
 import '../models/shop.dart';
 import '../models/staff.dart';
+import 'cart_service.dart';
+import 'catalog_service.dart';
 import 'pin_hasher.dart';
 
 /// Holds who is using the app right now: which shop this phone belongs to,
@@ -81,6 +83,10 @@ class SessionService extends ChangeNotifier {
       notifyListeners();
     });
 
+    // Start syncing the product list as soon as we know the shop, so it's
+    // already in memory (and cached for offline) before the first scan.
+    CatalogService.instance.start(shopId);
+
     notifyListeners();
     return null;
   }
@@ -101,6 +107,10 @@ class SessionService extends ChangeNotifier {
   void startShift(Staff who) {
     current = who;
     _ownerUnlocked = false;
+    // Every shift starts with an empty cart, so a sale is always recorded
+    // under the person who actually rang it up, whichever way the last
+    // shift ended (Switch, deactivation, sign-out).
+    CartService.instance.clear();
     notifyListeners();
   }
 
@@ -117,6 +127,9 @@ class SessionService extends ChangeNotifier {
   bool get ownerAccess => (current?.isOwner ?? false) || _ownerUnlocked;
 
   bool get ownerHasPin => staff.any((s) => s.isOwner && s.hasPin);
+
+  /// Can whoever is on shift add/edit/delete products without the owner PIN?
+  bool get canManageProducts => ownerAccess || (current?.canManageProducts ?? false);
 
   /// Checks [pin] against every active owner (a shop may have two).
   bool unlockOwner(String pin) {
@@ -162,10 +175,22 @@ class SessionService extends ChangeNotifier {
     return _staffRef.doc(who.id).update({'pinHash': FieldValue.delete()});
   }
 
+  Future<void> setCanManageProducts(Staff who, bool allowed) {
+    return _staffRef.doc(who.id).update({'canManageProducts': allowed});
+  }
+
+  /// Who is doing a write right now, stamped onto products so the owner
+  /// can see who last changed a price.
+  Map<String, String> get actor => {
+        'id': current?.id ?? '',
+        'name': current?.name ?? '',
+      };
+
   // ---------- Cleanup ----------
 
   Future<void> clear() async {
     await _cancelStreams();
+    CatalogService.instance.stop();
     shop = null;
     staff = [];
     allStaff = [];
