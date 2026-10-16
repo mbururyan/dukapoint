@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'firebase_options.dart';
+import 'services/device_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,6 +17,10 @@ Future<void> main() async {
     persistenceEnabled: true,
     cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
   );
+
+  // Loads this phone's tag and receipt counter before anything can sell,
+  // so the very first sale already has a proper receipt number.
+  await DeviceService.instance.init();
 
   runApp(const DukaPointApp());
 }

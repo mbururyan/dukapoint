@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 class Shop {
   const Shop({
     required this.id,
+    required this.code,
     required this.name,
     required this.address,
     required this.phone,
@@ -17,6 +18,9 @@ class Shop {
   });
 
   final String id;
+  // Short code that starts every receipt number (DMD-K7-000124). Set by
+  // you in the console when activating the shop; the app can't change it.
+  final String code;
   final String name;
   final String address;
   final String phone;
@@ -32,10 +36,12 @@ class Shop {
 
   factory Shop.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data() ?? const {};
+    final name = (d['name'] as String?) ?? 'Unnamed shop';
     return Shop(
       id: doc.id,
+      code: _code(d['code'] as String?, name),
       // Fallbacks so a half-filled console doc shows blanks instead of crashing.
-      name: (d['name'] as String?) ?? 'Unnamed shop',
+      name: name,
       address: (d['address'] as String?) ?? '',
       phone: (d['phone'] as String?) ?? '',
       tillNumber: (d['tillNumber'] as String?) ?? '',
@@ -44,5 +50,15 @@ class Shop {
       paidUntil: (d['paidUntil'] as Timestamp?)?.toDate(),
       suppliers: ((d['suppliers'] as List?) ?? const []).whereType<String>().toList()..sort(),
     );
+  }
+
+  /// The console value, cleaned to letters/digits in capitals. If you
+  /// forgot to set one, fall back to the first 3 letters of the name, so
+  /// selling never stops over a missing setup field.
+  static String _code(String? raw, String name) {
+    final clean = (raw ?? '').toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    if (clean.isNotEmpty) return clean;
+    final fromName = name.toUpperCase().replaceAll(RegExp(r'[^A-Z]'), '');
+    return fromName.isEmpty ? 'DKP' : fromName.substring(0, fromName.length < 3 ? fromName.length : 3);
   }
 }

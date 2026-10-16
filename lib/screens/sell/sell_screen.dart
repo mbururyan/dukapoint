@@ -10,6 +10,7 @@ import '../../widgets/owner_pin_sheet.dart';
 import '../../widgets/scanner_view.dart';
 import '../products/product_form_screen.dart';
 import '../products/product_picker_sheet.dart';
+import 'checkout_screen.dart';
 import 'qty_dialog.dart';
 
 /// Wireframe 3. Camera on top, cart below, total and Charge at the bottom.
@@ -153,8 +154,9 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   void _charge() {
-    // Checkout (cash / till / prompt) is step 5.
-    _snack('Checkout arrives in step 5.');
+    // Checkout reads the cart from CartService directly, so nothing needs
+    // passing in. It replaces itself with the receipt when payment is done.
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CheckoutScreen()));
   }
 
   void _snack(String text) {
