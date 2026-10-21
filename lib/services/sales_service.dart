@@ -54,7 +54,7 @@ class SalesService {
       change: change,
       mpesaCode: mpesaCode,
       status: 'paid',
-      dayKey: _dayKey(now),
+      dayKey: dayKey(now),
       at: now,
     );
 
@@ -77,8 +77,38 @@ class SalesService {
     return sale;
   }
 
+  /// Every sale from [fromDay] (inclusive) up to now, live.
+  ///
+  /// Works because dayKeys are written year-month-day ("2026-10-21"), so
+  /// comparing them as text gives the same order as comparing dates. One
+  /// range on one field needs no special Firestore index.
+  ///
+  /// Status isn't filtered here (that would need a composite index); the
+  /// dashboard keeps only 'paid' sales itself.
+  Stream<List<Sale>> salesFrom(String fromDay) {
+    return _db
+        .collection('shops')
+        .doc(SessionService.instance.shop!.id)
+        .collection('sales')
+        .where('dayKey', isGreaterThanOrEqualTo: fromDay)
+        .snapshots()
+        .map((q) => q.docs.map(Sale.fromDoc).toList());
+  }
+
+  /// One day's sales, live, for the Sales tab. Equality on one field:
+  /// no special Firestore index needed.
+  Stream<List<Sale>> salesOn(String day) {
+    return _db
+        .collection('shops')
+        .doc(SessionService.instance.shop!.id)
+        .collection('sales')
+        .where('dayKey', isEqualTo: day)
+        .snapshots()
+        .map((q) => q.docs.map(Sale.fromDoc).toList());
+  }
+
   /// The shop's local calendar day, used to fetch "today's sales" cheaply.
-  static String _dayKey(DateTime t) {
+  static String dayKey(DateTime t) {
     final m = t.month.toString().padLeft(2, '0');
     final d = t.day.toString().padLeft(2, '0');
     return '${t.year}-$m-$d';

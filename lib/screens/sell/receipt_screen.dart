@@ -6,12 +6,17 @@ import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
 import '../../utils/receipt_text.dart';
 
-/// Wireframe 5. Shown right after a sale is saved. The paper card shows the
-/// exact text that step 6 will send to the printer.
+/// Wireframe 5. Shown right after a sale is saved, and again when a past
+/// sale is opened from the Sales tab. The paper card shows the exact text
+/// that step 6 will send to the printer.
 class ReceiptScreen extends StatelessWidget {
-  const ReceiptScreen({super.key, required this.sale});
+  const ReceiptScreen({super.key, required this.sale, this.viewOnly = false});
 
   final Sale sale;
+
+  /// True when opened from the Sales tab: a past sale being looked at
+  /// (or reprinted), not one that was just paid for.
+  final bool viewOnly;
 
   String get _summary {
     switch (sale.method) {
@@ -41,13 +46,22 @@ class ReceiptScreen extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
               child: Column(
                 children: [
-                  const CircleAvatar(
+                  CircleAvatar(
                     radius: 26,
-                    backgroundColor: AppColors.success,
-                    child: Icon(Icons.check, color: Colors.white, size: 30),
+                    backgroundColor: viewOnly ? AppColors.surfaceMuted : AppColors.success,
+                    child: Icon(
+                      viewOnly ? Icons.receipt_long_outlined : Icons.check,
+                      color: viewOnly ? AppColors.ink : Colors.white,
+                      size: 28,
+                    ),
                   ),
                   const SizedBox(height: 10),
-                  const Text('Payment received', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+                  Text(
+                    viewOnly ? sale.receiptNo : 'Payment received',
+                    style: viewOnly
+                        ? AppTheme.mono(size: 20)
+                        : const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                  ),
                   const SizedBox(height: 4),
                   Text(_summary, style: const TextStyle(fontSize: 15, color: AppColors.inkSoft)),
                 ],
@@ -97,9 +111,10 @@ class ReceiptScreen extends StatelessWidget {
                   Expanded(
                     flex: 2,
                     child: FilledButton(
-                      // Back to the Sell screen; the cart was already cleared.
+                      // After a sale: back to an empty Sell screen (the cart
+                      // was already cleared). From Sales: back to the list.
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('New sale'),
+                      child: Text(viewOnly ? 'Close' : 'New sale'),
                     ),
                   ),
                 ],

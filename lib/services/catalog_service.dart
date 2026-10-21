@@ -78,7 +78,8 @@ class CatalogService extends ChangeNotifier {
     required String unit,
   }) {
     final actor = SessionService.instance.actor;
-    return _ref.doc(code).set({
+    final batch = _db.batch();
+    batch.set(_ref.doc(code), {
       'name': name,
       'nameLower': name.toLowerCase(),
       'price': price,
@@ -93,6 +94,21 @@ class CatalogService extends ChangeNotifier {
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+
+    // Log the new product with its opening stock, so the owner's Stock
+    // history shows where every unit on the shelf came from: opening
+    // stock, deliveries, and corrections. Logged even when the opening
+    // stock is 0, as a record that the product was added and by whom.
+    batch.set(_moves.doc(), _move(
+      productId: code,
+      productName: name,
+      unit: unit,
+      qty: stock,
+      type: 'created',
+      actor: actor,
+      unitCost: buyPrice,
+    ));
+    return batch.commit();
   }
 
   /// Edits everything except the code (it's the document ID).

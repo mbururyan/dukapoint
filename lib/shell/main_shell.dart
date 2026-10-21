@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../screens/owner/owner_gate.dart';
 import '../screens/products/products_screen.dart';
+import '../screens/sales/sales_screen.dart';
 import '../screens/sell/sell_screen.dart';
 import '../services/cart_service.dart';
 import '../services/session_service.dart';
@@ -78,7 +79,7 @@ class _MainShellState extends State<MainShell> {
           index: _index,
           children: [
             SellScreen(active: _index == _sellTab),
-            const _Placeholder(title: 'Sales', note: 'Sales history arrives in step 7'),
+            const SalesScreen(),
             const ProductsScreen(),
             const OwnerGate(),
           ],
@@ -144,28 +145,6 @@ class _ShiftChip extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _Placeholder extends StatelessWidget {
-  const _Placeholder({required this.title, required this.note});
-
-  final String title;
-  final String note;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          Text(note, style: const TextStyle(fontSize: 16, color: AppColors.inkSoft)),
-        ],
       ),
     );
   }

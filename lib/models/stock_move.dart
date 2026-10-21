@@ -25,7 +25,7 @@ class StockMove {
   final String productName; // copied in, so history survives renames
   final String unit; // 'piece' | 'kg'
   final double qty; // signed: +40 received, -2 correction
-  final String type; // 'received' | 'correction'
+  final String type; // 'created' | 'received' | 'correction'
   final String? supplier;
   final int? unitCost; // buying price per unit on this delivery
   final String? note;
@@ -33,6 +33,7 @@ class StockMove {
   final DateTime at;
 
   bool get isReceived => type == 'received';
+  bool get isCreated => type == 'created'; // a new product's opening stock
 
   factory StockMove.fromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data();
