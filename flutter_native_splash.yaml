@@ -1,0 +1,22 @@
+# Splash screen. Run: dart run flutter_native_splash:create --path=flutter_native_splash.yaml
+flutter_native_splash:
+  # Android 11 and older
+  color: "#4C1D95"
+  image: assets/splash/splash_logo.png        # 640px = 160dp at 4x
+  branding: assets/splash/branding.png        # "DukaPoint · Sell · Track · Grow"
+  branding_mode: bottom
+  branding_bottom_padding_android: 24
+  android_min_sdk: 24
+
+  # Android 12 and newer use their own splash system: the image sits in a
+  # circle in the middle and the branding goes at the bottom. Text can't sit
+  # right under the icon on these phones, which is why the name is in the
+  # branding image instead.
+  android_12:
+    color: "#4C1D95"
+    image: assets/splash/splash_android12.png  # 1152px, mark inside the 768px circle
+    branding: assets/splash/branding.png       # must be 800x320
+
+  ios: false
+  # The web version keeps its own boot loader in web/index.html.
+  web: false

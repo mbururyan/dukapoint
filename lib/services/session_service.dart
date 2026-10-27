@@ -179,6 +179,30 @@ class SessionService extends ChangeNotifier {
     return _staffRef.doc(who.id).update({'canManageProducts': allowed});
   }
 
+  // ---------- Shop settings (owner only, enforced by the Owner tab) ----------
+
+  /// Saves the owner's edits to the shop. The security rules refuse any
+  /// change to code, status or paidUntil, so only you can touch those.
+  /// Not awaited by the screen: works offline; the shop listener above
+  /// updates the receipt header straight away.
+  Future<void> updateShop(Map<String, dynamic> fields) {
+    return _db.collection('shops').doc(shop!.id).update({
+      ...fields,
+      'updatedBy': actor,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// The owner record whose PIN "Change owner PIN" changes: the owner on
+  /// shift if it's them, otherwise the shop's (first) owner.
+  Staff? get ownerRecord {
+    if (current?.isOwner ?? false) return current;
+    for (final s in staff) {
+      if (s.isOwner) return s;
+    }
+    return null;
+  }
+
   /// Who is doing a write right now, stamped onto products so the owner
   /// can see who last changed a price.
   Map<String, String> get actor => {

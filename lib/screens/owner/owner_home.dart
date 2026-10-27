@@ -7,6 +7,8 @@ import '../../services/session_service.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
 import 'dashboard_stats.dart';
+import 'printer_screen.dart';
+import 'shop_settings_screen.dart';
 import 'staff_screen.dart';
 import 'stock_history_screen.dart';
 
@@ -107,6 +109,12 @@ class _OwnerHomeState extends State<OwnerHome> {
 
         const SizedBox(height: 20),
         _MenuTile(
+          icon: Icons.storefront_outlined,
+          title: 'Shop settings',
+          subtitle: 'Receipt header, M-Pesa details, owner PIN',
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ShopSettingsScreen())),
+        ),
+        _MenuTile(
           icon: Icons.badge_outlined,
           title: 'Cashiers',
           subtitle: 'Add, deactivate, reset PINs, product access',
@@ -117,6 +125,12 @@ class _OwnerHomeState extends State<OwnerHome> {
           title: 'Stock history',
           subtitle: 'Deliveries and corrections, with who did them',
           onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const StockHistoryScreen())),
+        ),
+        _MenuTile(
+          icon: Icons.print_outlined,
+          title: 'Printer',
+          subtitle: "This phone's receipt printer, test print, auto-print",
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PrinterScreen())),
         ),
         // Only when a cashier is on shift and the owner unlocked this tab
         // with their PIN: lets the owner close it before handing back.

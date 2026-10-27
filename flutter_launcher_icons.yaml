@@ -1,0 +1,23 @@
+# App icon (R1A). Run: dart run flutter_launcher_icons -f flutter_launcher_icons.yaml
+flutter_launcher_icons:
+  # true = replace Flutter's default icon rather than adding a second one.
+  android: true
+  ios: false
+  image_path: "assets/icon/icon.png"
+  min_sdk_android: 24
+
+  # Android 8+ "adaptive" icon: each phone brand cuts it to its own shape
+  # (circle, squircle, teardrop), so the mark and the plum background are
+  # separate layers. The default 16% inset keeps the mark inside the cut.
+  adaptive_icon_background: "#4C1D95"
+  adaptive_icon_foreground: "assets/icon/icon_foreground.png"
+  # Android 13+ "themed icons": a one-colour version the phone tints to
+  # match the wallpaper, so DukaPoint doesn't stick out when that's on.
+  adaptive_icon_monochrome: "assets/icon/icon_monochrome.png"
+
+  # Browser tab and "Add to home screen" icon for the web version.
+  web:
+    generate: true
+    image_path: "assets/icon/icon.png"
+    background_color: "#4C1D95"
+    theme_color: "#6D28D9"

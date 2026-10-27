@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../models/shop.dart';
 import '../../services/cart_service.dart';
 import '../../services/sales_service.dart';
 import '../../services/session_service.dart';
@@ -82,6 +83,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       tendered: _method == 'cash' ? _tendered : null,
       change: _method == 'cash' ? _tendered! - _total : null,
       mpesaCode: _method == 'till' ? _code.text.trim() : null,
+      // Which M-Pesa the customer paid to, so the receipt and reports can
+      // tell Till, Paybill and Pochi apart later.
+      channel: _method == 'till' ? SessionService.instance.shop!.mpesaType : null,
     );
     _cart.clear();
 
@@ -126,7 +130,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     children: [
                       _MethodCard(label: 'Cash', sub: 'Shows change', selected: _method == 'cash', onTap: () => setState(() => _method = 'cash')),
                       const SizedBox(width: 8),
-                      _MethodCard(label: 'M-Pesa Till', sub: 'Buy Goods', selected: _method == 'till', onTap: () => setState(() => _method = 'till')),
+                      _MethodCard(label: 'M-Pesa', sub: shop.mpesaTypeLabel, selected: _method == 'till', onTap: () => setState(() => _method = 'till')),
                       const SizedBox(width: 8),
                       _MethodCard(label: 'M-Pesa prompt', sub: 'Later', selected: _method == 'stk', onTap: () => setState(() => _method = 'stk')),
                     ],
@@ -134,7 +138,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   const SizedBox(height: 22),
 
                   if (_method == 'cash') _cashPanel(),
-                  if (_method == 'till') _tillPanel(shop.tillNumber),
+                  if (_method == 'till') _tillPanel(shop),
                   if (_method == 'stk') _stkPanel(),
                 ],
               ),
@@ -203,7 +207,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  Widget _tillPanel(String till) {
+  Widget _tillPanel(Shop shop) {
+    // Headline + big number, worded for whichever M-Pesa the shop uses.
+    final (String heading, String number, String? extra) = switch (shop.mpesaType) {
+      'paybill' => (
+          'Customer pays to Paybill',
+          shop.paybillNumber,
+          shop.paybillAccount.isEmpty ? null : 'Account: ${shop.paybillAccount}',
+        ),
+      'pochi' => ('Customer sends to Pochi la Biashara', shop.pochiNumber, null),
+      _ => ('Customer pays to Buy Goods Till', shop.tillNumber, null),
+    };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -213,15 +227,21 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Customer pays to Buy Goods Till', style: TextStyle(color: AppColors.inkSoft)),
+              Text(heading, style: const TextStyle(color: AppColors.inkSoft)),
               const SizedBox(height: 4),
               Text(
-                till.isEmpty ? 'Not set' : till,
-                style: AppTheme.mono(size: 28, color: till.isEmpty ? AppColors.danger : AppColors.ink),
+                number.isEmpty ? 'Not set: add it in Owner > Shop settings' : number,
+                style: number.isEmpty
+                    ? const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.danger)
+                    : AppTheme.mono(size: 28),
               ),
+              if (extra != null) ...[
+                const SizedBox(height: 2),
+                Text(extra, style: AppTheme.mono(size: 16)),
+              ],
               const SizedBox(height: 6),
               const Text(
-                'Check the M-Pesa SMS on the till phone, then type its code below.',
+                'Check the M-Pesa SMS on the shop phone, then type its code below.',
                 style: TextStyle(fontSize: 13, height: 1.4, color: AppColors.inkSoft),
               ),
             ],

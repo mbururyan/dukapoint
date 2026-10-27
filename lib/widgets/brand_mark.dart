@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../theme/app_theme.dart';
-
-/// The DukaPoint logo square plus name. Same look as the web boot loader,
-/// so the hand-off from loader to app doesn't jump.
+/// The DukaPoint logo (R1A, the same picture as the app icon) plus name.
+/// Same look as the web boot loader and the splash, so nothing jumps when
+/// one hands over to the next.
 class BrandMark extends StatelessWidget {
   const BrandMark({super.key, this.size = 48});
 
@@ -14,14 +13,19 @@ class BrandMark extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            color: AppColors.primary,
-            borderRadius: BorderRadius.circular(size * 0.25),
+        // The launcher icon file itself, so the logo can never drift away
+        // from the icon on the home screen. The file is a full square;
+        // the rounding is done here, like a phone launcher does.
+        ClipRRect(
+          borderRadius: BorderRadius.circular(size * 0.25),
+          child: Image.asset(
+            'assets/icon/icon.png',
+            width: size,
+            height: size,
+            // A 1024px image shrunk to ~56px: medium filtering keeps the
+            // thin barcode lines from shimmering.
+            filterQuality: FilterQuality.medium,
           ),
-          child: Icon(Icons.storefront_outlined, color: Colors.white, size: size * 0.58),
         ),
         SizedBox(width: size * 0.25),
         Text(

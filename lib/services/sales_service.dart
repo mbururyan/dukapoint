@@ -22,6 +22,7 @@ class SalesService {
     int? tendered,
     int? change,
     String? mpesaCode,
+    String? channel,
   }) {
     final session = SessionService.instance;
     final shopRef = _db.collection('shops').doc(session.shop!.id);
@@ -53,6 +54,7 @@ class SalesService {
       tendered: tendered,
       change: change,
       mpesaCode: mpesaCode,
+      channel: channel,
       status: 'paid',
       dayKey: dayKey(now),
       at: now,

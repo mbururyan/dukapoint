@@ -59,6 +59,7 @@ class Sale {
     required this.tendered,
     required this.change,
     required this.mpesaCode,
+    required this.channel,
     required this.status,
     required this.dayKey,
     required this.at,
@@ -75,7 +76,10 @@ class Sale {
   final String method; // 'cash' | 'till' | 'stk'
   final int? tendered; // cash only
   final int? change; // cash only
-  final String? mpesaCode; // till only
+  final String? mpesaCode; // M-Pesa only
+  // Which M-Pesa type the customer paid to: 'till' | 'paybill' | 'pochi'.
+  // Null for cash. Sales saved before this existed read as 'till'.
+  final String? channel;
   final String status; // 'pending' | 'paid' | 'cancelled'
   final String dayKey; // '2026-10-15', the shop's local date
   final DateTime at; // phone time when the sale was made
@@ -93,6 +97,7 @@ class Sale {
           'tendered': tendered,
           'change': change,
           'mpesaCode': mpesaCode,
+          'channel': channel,
           'phone': null, // filled by the M-Pesa prompt, later
         },
         'status': status,
@@ -122,6 +127,7 @@ class Sale {
       tendered: (pay['tendered'] as num?)?.round(),
       change: (pay['change'] as num?)?.round(),
       mpesaCode: pay['mpesaCode'] as String?,
+      channel: (pay['channel'] as String?) ?? (pay['method'] == 'till' ? 'till' : null),
       status: (d['status'] as String?) ?? 'paid',
       dayKey: (d['dayKey'] as String?) ?? '',
       at: (d['createdAtClient'] as Timestamp?)?.toDate() ?? DateTime.now(),
