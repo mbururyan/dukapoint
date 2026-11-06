@@ -59,6 +59,32 @@ class CatalogService extends ChangeNotifier {
 
   Product? byCode(String code) => _byCode[code.trim()];
 
+  /// Every brand already used on a product in this shop, A–Z, once each
+  /// ignoring case. Feeds the Source field's suggestions, so there's no
+  /// separate brand list for the owner to keep up to date.
+  List<String> get knownSources {
+    final seen = <String, String>{}; // lower case -> first spelling seen
+    for (final p in products) {
+      final s = p.source;
+      if (s != null) seen.putIfAbsent(s.toLowerCase(), () => s);
+    }
+    final list = seen.values.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return list;
+  }
+
+  /// Tidies a typed source before saving: trims, single spaces, and reuses
+  /// the existing spelling if the same brand is already in the shop, so
+  /// "fcl" becomes "FCL" and reports don't split one brand in two.
+  /// Returns null for blank (loose items have no source).
+  String? canonicalSource(String? raw) {
+    final t = (raw ?? '').trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (t.isEmpty) return null;
+    for (final s in knownSources) {
+      if (s.toLowerCase() == t.toLowerCase()) return s;
+    }
+    return t;
+  }
+
   int get lowCount => products.where((p) => p.isLow).length;
 
   // ---------------------------------------------------------------------
@@ -76,6 +102,8 @@ class CatalogService extends ChangeNotifier {
     required double stock,
     required double lowStockAt,
     required String unit,
+    String countedAs = 'item',
+    String? source,
   }) {
     final actor = SessionService.instance.actor;
     final batch = _db.batch();
@@ -87,6 +115,8 @@ class CatalogService extends ChangeNotifier {
       'stock': stock,
       'lowStockAt': lowStockAt,
       'unit': unit,
+      'countedAs': countedAs,
+      'source': canonicalSource(source),
       'active': true,
       'soldCount': 0,
       'createdBy': actor,
@@ -123,6 +153,8 @@ class CatalogService extends ChangeNotifier {
     required double lowStockAt,
     required String unit,
     required bool active,
+    String countedAs = 'item',
+    String? source,
   }) {
     final actor = SessionService.instance.actor;
     final batch = _db.batch();
@@ -134,6 +166,8 @@ class CatalogService extends ChangeNotifier {
       'stock': stock,
       'lowStockAt': lowStockAt,
       'unit': unit,
+      'countedAs': countedAs,
+      'source': canonicalSource(source),
       'active': active,
       // Now that trusted cashiers can change prices, record who did it.
       'updatedBy': actor,

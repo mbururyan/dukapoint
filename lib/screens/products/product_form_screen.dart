@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../models/product.dart';
 import '../../services/catalog_service.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/counting.dart';
 import '../../utils/format.dart';
 import '../../utils/shop_code.dart';
 import '../scan/scan_screen.dart';
@@ -31,8 +32,14 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   late final TextEditingController _buyPrice;
   late final TextEditingController _stock;
   late final TextEditingController _lowAt;
+  late final TextEditingController _source;
+  final _sourceFocus = FocusNode();
   late String _unit;
+  late String _countedAs;
   late bool _active;
+
+  // The usual shop words. Anything else goes through "Other…".
+  static const _words = ['item', 'bag', 'packet', 'bottle', 'tin', 'sack'];
 
   bool get _isEdit => widget.product != null;
 
@@ -42,19 +49,49 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     final p = widget.product;
     _code = TextEditingController(text: p?.code ?? widget.initialCode ?? '');
     _name = TextEditingController(text: p?.name ?? '');
+    _source = TextEditingController(text: p?.source ?? '');
     _price = TextEditingController(text: p == null ? '' : '${p.price}');
     _buyPrice = TextEditingController(text: p?.buyPrice?.toString() ?? '');
     _stock = TextEditingController(text: p == null ? '' : qty(p.stock));
     _lowAt = TextEditingController(text: p == null ? '5' : qty(p.lowStockAt));
     _unit = p?.unit ?? 'piece';
+    _countedAs = p?.countedAs ?? 'item';
     _active = p?.active ?? true;
+  }
+
+  /// "Other…": the owner types their own word, e.g. "crate" or "roll".
+  Future<void> _otherWord() async {
+    final controller = TextEditingController(text: _words.contains(_countedAs) ? '' : _countedAs);
+    final word = await showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Counted as'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 12,
+          textCapitalization: TextCapitalization.none,
+          decoration: const InputDecoration(hintText: 'e.g. crate', helperText: 'One of them, not many: "crate", not "crates"'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(c, controller.text), child: const Text('Use')),
+        ],
+      ),
+    );
+    controller.dispose();
+    // Lower case and single spaces, so "Crate " and "crate" are one word
+    // when sales get counted up.
+    final clean = (word ?? '').trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+    if (clean.isNotEmpty && mounted) setState(() => _countedAs = clean);
   }
 
   @override
   void dispose() {
-    for (final c in [_code, _name, _price, _buyPrice, _stock, _lowAt]) {
+    for (final c in [_code, _name, _price, _buyPrice, _stock, _lowAt, _source]) {
       c.dispose();
     }
+    _sourceFocus.dispose();
     super.dispose();
   }
 
@@ -136,6 +173,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
         stock: stock,
         lowStockAt: lowAt,
         unit: _unit,
+        countedAs: _countedAs,
+        source: _source.text,
         active: _active,
       );
     } else {
@@ -147,6 +186,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
         stock: stock,
         lowStockAt: lowAt,
         unit: _unit,
+        countedAs: _countedAs,
+        source: _source.text,
       );
     }
     Navigator.pop(context, '$name saved');
@@ -191,6 +232,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
             children: [
+              const _Group('What it is'),
               // ---- Barcode ----
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -205,7 +247,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                       style: AppTheme.mono(size: 17, weight: FontWeight.w500),
                       decoration: InputDecoration(
                         labelText: 'Barcode',
-                        helperText: _isEdit ? "A product's barcode can't be changed" : 'Scan, type, or generate below',
+                        helperText: _isEdit ? "A product's barcode can't be changed" : null,
+                        hintText: _isEdit ? null : 'Scan or type',
                         filled: _isEdit,
                         fillColor: _isEdit ? AppColors.surfaceMuted : null,
                       ),
@@ -230,16 +273,26 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                   ],
                 ],
               ),
-              if (!_isEdit)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
-                    onPressed: _generateCode,
-                    icon: const Icon(Icons.auto_awesome_outlined, size: 18),
-                    label: const Text('No barcode? Generate a shop code'),
+              // A real button, full width and amber (the same colour as Edit
+              // product), not a small link: shops that don't use barcodes at
+              // all tap this for every product, so it has to be easy to hit.
+              if (!_isEdit) ...[
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: _generateCode,
+                  icon: const Icon(Icons.auto_awesome_outlined),
+                  label: const Text('No barcode? Make a shop code'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(50),
+                    backgroundColor: AppColors.warningBg, // pale amber
+                    foregroundColor: AppColors.ink, // dark text: readable on amber
+                    side: const BorderSide(color: AppColors.accent, width: 2),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                   ),
                 ),
-              const SizedBox(height: 12),
+              ],
+              const SizedBox(height: 16),
 
               // ---- Name ----
               TextFormField(
@@ -250,19 +303,59 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
               ),
               const SizedBox(height: 16),
 
+              // ---- Source ----
+              // Right under the name: people say them together ("FCL Sow
+              // & Weaner"). Suggestions only appear while typing.
+              _SourceField(controller: _source, focusNode: _sourceFocus),
+              const SizedBox(height: 20),
+
+              const _Group("How it's sold"),
               // ---- Unit ----
               const Text('Sold by', style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               SegmentedButton<String>(
                 segments: const [
-                  ButtonSegment(value: 'piece', label: Text('Piece / bag'), icon: Icon(Icons.inventory_2_outlined)),
+                  // "By count" now that the word (bag, packet...) is chosen below.
+                  ButtonSegment(value: 'piece', label: Text('By count'), icon: Icon(Icons.inventory_2_outlined)),
                   ButtonSegment(value: 'kg', label: Text('Weight (kg)'), icon: Icon(Icons.scale_outlined)),
                 ],
                 selected: {_unit},
                 onSelectionChanged: (s) => setState(() => _unit = s.first),
               ),
+
+              // ---- Counted as (per-piece only) ----
+              if (_unit == 'piece') ...[
+                const SizedBox(height: 16),
+                const Text('Counted as', style: TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final w in _words)
+                      ChoiceChip(
+                        label: Text(w),
+                        selected: _countedAs == w,
+                        onSelected: (_) => setState(() => _countedAs = w),
+                      ),
+                    // A typed word shows as its own selected chip; tapping
+                    // it (or "Other…") lets the owner change it.
+                    ChoiceChip(
+                      label: Text(_words.contains(_countedAs) ? 'Other…' : _countedAs),
+                      selected: !_words.contains(_countedAs),
+                      onSelected: (_) => _otherWord(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Shows as "3 bags" on sales and stock. Leave it on "item" if unsure.',
+                  style: TextStyle(fontSize: 13, color: AppColors.inkSoft),
+                ),
+              ],
               const SizedBox(height: 16),
 
+              const _Group('Price'),
               // ---- Prices ----
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -292,6 +385,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
               ),
               const SizedBox(height: 16),
 
+              const SizedBox(height: 4),
+              const _Group('Stock'),
               // ---- Stock ----
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -304,7 +399,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                       style: AppTheme.mono(size: 17, weight: FontWeight.w500),
                       decoration: InputDecoration(
                         labelText: 'Stock on hand',
-                        suffixText: _unit == 'kg' ? 'kg' : null,
+                        suffixText: _unit == 'kg' ? 'kg' : plural(_countedAs),
                         // Steer deliveries to "Add stock" so they get a supplier
                         // and show as "received", not as a correction.
                         helperText: _isEdit ? 'Corrections only' : null,
@@ -321,7 +416,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                       style: AppTheme.mono(size: 17, weight: FontWeight.w500),
                       decoration: InputDecoration(
                         labelText: 'Warn when at',
-                        suffixText: _unit == 'kg' ? 'kg' : null,
+                        suffixText: _unit == 'kg' ? 'kg' : plural(_countedAs),
                       ),
                       validator: _validateQty,
                     ),
@@ -387,6 +482,90 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                 ],
               ],
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Small grey section label ("WHAT IT IS") that breaks up the long form.
+/// Just a label: nothing to tap.
+class _Group extends StatelessWidget {
+  const _Group(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Text(
+        text.toUpperCase(),
+        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.8, color: AppColors.inkSoft),
+      ),
+    );
+  }
+}
+
+/// Plain text field for the brand. While typing, brands already used on
+/// other products drop down underneath; nothing shows when it's not being
+/// typed in. Saving also matches "fcl" to an existing "FCL" (in
+/// CatalogService), so a skipped suggestion still doesn't split a brand.
+class _SourceField extends StatelessWidget {
+  const _SourceField({required this.controller, required this.focusNode});
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+
+  @override
+  Widget build(BuildContext context) {
+    final known = CatalogService.instance.knownSources;
+    return LayoutBuilder(
+      // The width, so the dropdown lines up exactly under the field.
+      builder: (context, box) => RawAutocomplete<String>(
+        textEditingController: controller,
+        focusNode: focusNode,
+        optionsBuilder: (value) {
+          final q = value.text.trim().toLowerCase();
+          if (q.isEmpty) return const Iterable<String>.empty();
+          // Starts-with first ("Fc" -> FCL), then contains ("heus" ->
+          // De Heus). An exact match isn't offered: it's already typed.
+          final starts = known.where((s) => s.toLowerCase().startsWith(q));
+          final contains = known.where((s) => !s.toLowerCase().startsWith(q) && s.toLowerCase().contains(q));
+          return [...starts, ...contains].where((s) => s.toLowerCase() != q).take(5);
+        },
+        fieldViewBuilder: (context, textController, node, onSubmit) => TextFormField(
+          controller: textController,
+          focusNode: node,
+          textCapitalization: TextCapitalization.words,
+          maxLength: 30,
+          decoration: const InputDecoration(
+            labelText: 'Source (brand / maker)',
+            hintText: 'e.g. FCL, De Heus, EABL',
+            helperText: 'Optional. Leave blank for loose items.',
+            counterText: '', // the 30-letter limit doesn't need a counter
+          ),
+        ),
+        optionsViewBuilder: (context, onSelected, options) => Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(10),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: box.maxWidth, maxHeight: 240),
+              child: ListView(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                children: [
+                  for (final o in options)
+                    ListTile(
+                      title: Text(o),
+                      onTap: () => onSelected(o),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ),

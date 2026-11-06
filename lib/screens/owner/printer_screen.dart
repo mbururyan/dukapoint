@@ -4,10 +4,12 @@ import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 import '../../services/printer_service.dart';
 import '../../services/session_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/printer_chip.dart';
 
-/// Owner > Printer. Picks THIS phone's receipt printer, prints a test
-/// slip, and turns auto-print on or off. Lives in the owner area so a
-/// cashier can't switch the till to the wrong printer mid-shift.
+/// Picks THIS phone's receipt printer, prints a test slip, and turns
+/// auto-print on or off. Open to everyone (from the printer chip on Sell,
+/// the drawer, and Owner > Printer): a cashier whose printer died mid-shift
+/// shouldn't have to find the owner to swap it.
 class PrinterScreen extends StatefulWidget {
   const PrinterScreen({super.key});
 
@@ -115,6 +117,14 @@ class _PrinterScreenState extends State<PrinterScreen> {
                   children: [
                     Text(p?.name ?? 'No printer chosen', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
                     if (p != null) Text(p.mac, style: AppTheme.mono(size: 13, weight: FontWeight.w400, color: AppColors.inkSoft)),
+                    if (p != null) ...[
+                      const SizedBox(height: 4),
+                      // Same words and colours as the chip on Sell.
+                      Builder(builder: (_) {
+                        final look = printerLook(_printers.status);
+                        return Text(look.label, style: TextStyle(fontWeight: FontWeight.w700, color: look.fg));
+                      }),
+                    ],
                   ],
                 ),
               ),

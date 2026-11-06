@@ -6,14 +6,18 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../models/sale.dart';
 import '../../services/printer_service.dart';
+import '../../services/sales_service.dart';
 import '../../services/session_service.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
 import '../../utils/receipt_text.dart';
+import '../../widgets/owner_pin_sheet.dart';
+import '../sales/void_sale_sheet.dart';
 
 /// Wireframe 5. Shown right after a sale is saved (prints by itself if
 /// auto-print is on), and again when a past sale is opened from the Sales
-/// tab (Reprint). The paper card shows exactly what the printer prints.
+/// tab (Reprint, or Void within 7 days). The paper card shows exactly what
+/// the printer prints.
 class ReceiptScreen extends StatefulWidget {
   const ReceiptScreen({super.key, required this.sale, this.viewOnly = false});
 
@@ -43,7 +47,26 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   /// copy and says REPRINT on it.
   bool _printedOnce = false;
 
-  Sale get sale => widget.sale;
+  // A copy we can swap for the cancelled version after a void, so the
+  // screen changes at once instead of waiting for Firestore.
+  late Sale _sale = widget.sale;
+  Sale get sale => _sale;
+
+  /// Reason first, then the owner's approval, then the void itself.
+  /// Closing either sheet at any point leaves the sale untouched.
+  Future<void> _void() async {
+    final choice = await askVoidReason(context, sale);
+    if (choice == null || !mounted) return;
+
+    final approved = await requireOwner(context, reason: 'to void ${sale.receiptNo}');
+    if (!approved || !mounted) return;
+
+    final cancelled = SalesService.instance.voidSale(sale, reason: choice.reason, note: choice.note);
+    setState(() => _sale = cancelled);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Sale voided. Stock is back on the shelf.')),
+    );
+  }
 
   @override
   void initState() {
@@ -127,6 +150,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     final shop = SessionService.instance.shop!;
     final lines = buildReceiptLines(sale, shop);
     final printing = _state == _PrintState.printing;
+    final cancelled = sale.isCancelled;
 
     return Scaffold(
       backgroundColor: AppColors.surfaceMuted,
@@ -157,10 +181,18 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                         : const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 4),
-                  Text(_summary, style: const TextStyle(fontSize: 15, color: AppColors.inkSoft)),
+                  Text(
+                    _summary,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: AppColors.inkSoft,
+                      decoration: cancelled ? TextDecoration.lineThrough : null,
+                    ),
+                  ),
                 ],
               ),
             ),
+            if (cancelled) _cancelledStrip(),
             _statusStrip(),
             const Divider(height: 1),
 
@@ -177,7 +209,17 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                         color: Colors.white,
                         border: Border.all(color: AppColors.border),
                       ),
-                      child: _ReceiptPaper(lines: lines),
+                      child: cancelled
+                          // Faded receipt with a stamp across it: still
+                          // readable for checking, but clearly not valid.
+                          ? Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                Opacity(opacity: 0.45, child: _ReceiptPaper(lines: lines)),
+                                const _CancelledStamp(),
+                              ],
+                            )
+                          : _ReceiptPaper(lines: lines),
                     ),
                   ),
                 ),
@@ -194,7 +236,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: (!_printers.supported || printing) ? null : _print,
+                          // No printing or sharing a cancelled sale: a
+                          // fresh copy could be passed off as proof of payment.
+                          onPressed: (!_printers.supported || printing || cancelled) ? null : _print,
                           icon: printing
                               ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.5))
                               : const Icon(Icons.print_outlined),
@@ -208,7 +252,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: _sharing ? null : _share,
+                          onPressed: (_sharing || cancelled) ? null : _share,
                           icon: _sharing
                               ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.5))
                               : const Icon(Icons.share_outlined),
@@ -228,12 +272,47 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                     onPressed: () => Navigator.pop(context),
                     child: Text(widget.viewOnly ? 'Close' : 'New sale'),
                   ),
+                  // Void lives only on past receipts opened from Sales, as a
+                  // red link under Close, so it's never tapped by accident
+                  // while the next customer is waiting.
+                  if (widget.viewOnly && sale.canVoid)
+                    TextButton(
+                      onPressed: _void,
+                      style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+                      child: const Text('Void this sale'),
+                    )
+                  else if (widget.viewOnly && sale.status == 'paid')
+                    const Padding(
+                      padding: EdgeInsets.only(top: 10),
+                      child: Text(
+                        "Older than 7 days, can't be voided",
+                        style: TextStyle(fontSize: 13, color: AppColors.inkSoft),
+                      ),
+                    ),
                 ],
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  /// "CANCELLED · Customer returned · by Ryan · 06/11 11:20". Who and why
+  /// are on screen so nobody has to dig for them later.
+  Widget _cancelledStrip() {
+    final parts = [
+      'CANCELLED',
+      if (sale.cancelReason != null) sale.cancelReason!,
+      if (sale.cancelNote != null) sale.cancelNote!,
+      if ((sale.cancelledByName ?? '').isNotEmpty) 'by ${sale.cancelledByName}',
+      if (sale.cancelledAt != null) dayTime(sale.cancelledAt!),
+    ];
+    return _Strip(
+      bg: _dangerBg,
+      fg: AppColors.danger,
+      icon: Icons.block,
+      text: parts.join(' · '),
     );
   }
 
@@ -272,6 +351,32 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
           action: canRetry ? TextButton(onPressed: _print, child: const Text('Retry')) : null,
         );
     }
+  }
+}
+
+// Same pale red as the expired-plan tile on the Owner tab.
+const _dangerBg = Color(0xFFFEE4E2);
+
+class _CancelledStamp extends StatelessWidget {
+  const _CancelledStamp();
+
+  @override
+  Widget build(BuildContext context) {
+    return Transform.rotate(
+      angle: -0.24, // about -14°, like a rubber stamp
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.85),
+          border: Border.all(color: AppColors.danger, width: 3),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: const Text(
+          'CANCELLED',
+          style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: AppColors.danger, letterSpacing: 1),
+        ),
+      ),
+    );
   }
 }
 

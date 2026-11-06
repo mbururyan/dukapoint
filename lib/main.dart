@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'app.dart';
 import 'firebase_options.dart';
 import 'services/device_service.dart';
+import 'services/plan_service.dart';
+import 'services/printer_service.dart';
+import 'services/sync_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,6 +24,14 @@ Future<void> main() async {
   // Loads this phone's tag and receipt counter before anything can sell,
   // so the very first sale already has a proper receipt number.
   await DeviceService.instance.init();
+  // This phone's saved printer and auto-print switch, before the first sale
+  // tries to print.
+  await PrinterService.instance.init();
+  // The last real time seen, so a lapsed plan is judged correctly even
+  // when the app opens offline.
+  await PlanService.instance.init();
+  // Not awaited: it only starts listening for unsent sales.
+  SyncService.instance.init();
 
   runApp(const DukaPointApp());
 }

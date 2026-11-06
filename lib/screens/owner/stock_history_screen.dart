@@ -52,10 +52,14 @@ class _StockHistoryScreenState extends State<StockHistoryScreen> {
                   return _Message('Could not load stock history.\n${snap.error}');
                 }
                 if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-                final list = snap.data!.where((m) => _filter == 'all' || m.type == _filter).toList();
+                // Voids sit under "Fixes": both are stock going back to
+                // what it should be. A fifth button wouldn't fit on a phone.
+                final list = snap.data!
+                    .where((m) => _filter == 'all' || m.type == _filter || (_filter == 'correction' && m.isVoid))
+                    .toList();
                 if (list.isEmpty) {
                   return const _Message(
-                    'Nothing here yet.\nNew products, deliveries and stock fixes show up here.',
+                    'Nothing here yet.\nNew products, deliveries, stock fixes and voids show up here.',
                   );
                 }
                 return ListView.separated(
@@ -87,7 +91,9 @@ class _MoveRow extends StatelessWidget {
         ? 'New product · opening stock'
         : m.isReceived
             ? (m.supplier == null ? 'Received' : 'Received from ${m.supplier}')
-            : 'Correction';
+            : m.isVoid
+                ? 'Back from cancelled sale ${m.receiptNo ?? ''}'.trim()
+                : 'Correction';
     final cost = m.unitCost == null ? '' : ' · ${ksh(m.unitCost!)} each';
 
     // Three kinds, three colours, but never colour alone: each also has
@@ -119,17 +125,11 @@ class _MoveRow extends StatelessWidget {
                     ),
                     if (m.isCreated) ...[
                       const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: AppColors.primaryTint,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text(
-                          'NEW',
-                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.primary),
-                        ),
-                      ),
+                      const _Tag(text: 'NEW', fg: AppColors.primary, bg: AppColors.primaryTint),
+                    ],
+                    if (m.isVoid) ...[
+                      const SizedBox(width: 8),
+                      const _Tag(text: 'VOID', fg: AppColors.danger, bg: Color(0xFFFEE4E2)),
                     ],
                   ],
                 ),
@@ -150,6 +150,23 @@ class _MoveRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _Tag extends StatelessWidget {
+  const _Tag({required this.text, required this.fg, required this.bg});
+
+  final String text;
+  final Color fg;
+  final Color bg;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
+      child: Text(text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg)),
     );
   }
 }

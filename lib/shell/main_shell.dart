@@ -8,6 +8,7 @@ import '../services/cart_service.dart';
 import '../services/session_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/format.dart';
+import 'app_drawer.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -59,6 +60,8 @@ class _MainShellState extends State<MainShell> {
     final session = SessionService.instance;
 
     return Scaffold(
+      // Having a drawer is enough: the app bar adds the ☰ button itself.
+      drawer: AppDrawer(onSwitchCashier: _switchCashier),
       appBar: AppBar(
         title: Text(
           session.shop?.name ?? '',

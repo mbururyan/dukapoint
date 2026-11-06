@@ -5,6 +5,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 ///
 /// Sales are NOT logged here: every sale is already its own record in
 /// /sales, so logging it twice would double the writes for no new info.
+/// Voids ARE logged: stock going back up is a change the owner should
+/// see in Stock history, with the receipt it came from.
 class StockMove {
   const StockMove({
     required this.id,
@@ -18,6 +20,7 @@ class StockMove {
     required this.note,
     required this.byName,
     required this.at,
+    this.receiptNo,
   });
 
   final String id;
@@ -25,15 +28,17 @@ class StockMove {
   final String productName; // copied in, so history survives renames
   final String unit; // 'piece' | 'kg'
   final double qty; // signed: +40 received, -2 correction
-  final String type; // 'created' | 'received' | 'correction'
+  final String type; // 'created' | 'received' | 'correction' | 'void'
   final String? supplier;
   final int? unitCost; // buying price per unit on this delivery
   final String? note;
   final String byName;
   final DateTime at;
+  final String? receiptNo; // voids only: which cancelled sale it came from
 
   bool get isReceived => type == 'received';
   bool get isCreated => type == 'created'; // a new product's opening stock
+  bool get isVoid => type == 'void'; // stock back from a cancelled sale
 
   factory StockMove.fromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data();
@@ -51,6 +56,7 @@ class StockMove {
       // Client time, not server time: a delivery logged offline must show
       // when it happened, not hours later when the phone reconnected.
       at: (d['createdAtClient'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      receiptNo: d['receiptNo'] as String?,
     );
   }
 }

@@ -5,6 +5,7 @@ import '../../services/sales_service.dart';
 import '../../services/session_service.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format.dart';
+import '../../widgets/status_banners.dart';
 import '../sell/receipt_screen.dart';
 
 /// Wireframe 6. One day's sales, newest first. Tap a sale to see its
@@ -87,6 +88,7 @@ class _SalesScreenState extends State<SalesScreen> {
       listenable: session,
       builder: (context, _) => Column(
         children: [
+          const SyncBanner(),
           // ---- Day picker ----
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
@@ -131,8 +133,10 @@ class _SalesScreenState extends State<SalesScreen> {
                 if (!snap.hasData) return const Center(child: CircularProgressIndicator());
 
                 final shown = _visible(snap.data!);
-                // Totals ignore anything not paid (pending/cancelled later).
+                // Totals ignore anything not paid (cancelled, or pending
+                // M-Pesa prompts later). Cancelled sales stay in the list.
                 final paid = shown.where((s) => s.status == 'paid');
+                final cancelledCount = shown.where((s) => s.isCancelled).length;
                 final total = paid.fold<int>(0, (t, s) => t + s.total);
                 final cash = paid.where((s) => s.method == 'cash').fold<int>(0, (t, s) => t + s.total);
                 final mpesa = total - cash;
@@ -165,6 +169,18 @@ class _SalesScreenState extends State<SalesScreen> {
                         onSelectionChanged: (s) => setState(() => _filter = s.first),
                       ),
                     ),
+                    if (cancelledCount > 0)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            '${paid.length} ${paid.length == 1 ? 'sale' : 'sales'} · '
+                            '$cancelledCount cancelled (not in the totals)',
+                            style: const TextStyle(fontSize: 13, color: AppColors.inkSoft),
+                          ),
+                        ),
+                      ),
                     const SizedBox(height: 8),
                     const Divider(height: 1),
 
@@ -177,7 +193,6 @@ class _SalesScreenState extends State<SalesScreen> {
                               separatorBuilder: (_, __) => const Divider(height: 1),
                               itemBuilder: (_, i) => _SaleRow(
                                 sale: shown[i],
-                                showCashier: session.ownerAccess,
                                 onTap: () => Navigator.of(context).push(
                                   MaterialPageRoute(builder: (_) => ReceiptScreen(sale: shown[i], viewOnly: true)),
                                 ),
@@ -196,23 +211,24 @@ class _SalesScreenState extends State<SalesScreen> {
 }
 
 class _SaleRow extends StatelessWidget {
-  const _SaleRow({required this.sale, required this.showCashier, required this.onTap});
+  const _SaleRow({required this.sale, required this.onTap});
 
   final Sale sale;
-  final bool showCashier;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final s = sale;
-    final hh = s.at.hour.toString().padLeft(2, '0');
-    final mm = s.at.minute.toString().padLeft(2, '0');
-    final method = s.method == 'cash' ? 'Cash' : 'M-Pesa${s.mpesaCode == null ? '' : ' · ${s.mpesaCode}'}';
+    final method = s.method == 'cash' ? 'Cash' : 'M-Pesa${s.mpesaCode == null ? '' : ' ${s.mpesaCode}'}';
+    // Line 3: who, when, how much stuff. The cashier's name shows even to
+    // cashiers (who only see their own sales) because it's what was asked
+    // for and it keeps every row the same shape.
     final details = [
-      '$hh:$mm',
-      if (showCashier) s.cashierName,
-      '${s.itemCount} ${s.itemCount == 1 ? 'item' : 'items'}',
+      if (s.cashierName.isNotEmpty) s.cashierName,
+      dayTime(s.at),
+      s.countText,
     ].join(' · ');
+    final cancelled = s.isCancelled;
 
     return InkWell(
       onTap: onTap,
@@ -224,19 +240,98 @@ class _SaleRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(s.receiptNo, style: AppTheme.mono(size: 14)),
+                  // Line 1: what was bought. That's what people remember
+                  // ("the man who bought two bags of layers mash").
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          s.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      if (cancelled) ...[
+                        const SizedBox(width: 6),
+                        const _CancelledTag(),
+                      ],
+                    ],
+                  ),
                   const SizedBox(height: 3),
-                  Text(details, style: const TextStyle(fontSize: 13, color: AppColors.inkSoft)),
+                  // Line 2: which receipt, how it was paid.
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(text: s.receiptNo, style: AppTheme.mono(size: 13, weight: FontWeight.w500)),
+                              TextSpan(text: ' · $method'),
+                            ],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                      // Saved on the phone only, so far. Clears by itself
+                      // once it reaches the server.
+                      if (s.pendingSync) ...[
+                        const SizedBox(width: 6),
+                        const _NotSentTag(),
+                      ],
+                    ],
+                  ),
                   const SizedBox(height: 2),
-                  Text(method, style: const TextStyle(fontSize: 13)),
+                  Text(details, style: const TextStyle(fontSize: 13, color: AppColors.inkSoft)),
                 ],
               ),
             ),
-            Text(ksh(s.total), style: AppTheme.mono(size: 16)),
+            const SizedBox(width: 8),
+            Text(
+              ksh(s.total),
+              style: AppTheme.mono(
+                size: 16,
+                color: cancelled ? AppColors.inkSoft : AppColors.ink,
+              ).copyWith(decoration: cancelled ? TextDecoration.lineThrough : null),
+            ),
             const SizedBox(width: 4),
             const Icon(Icons.chevron_right, color: AppColors.inkSoft),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _NotSentTag extends StatelessWidget {
+  const _NotSentTag();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(color: AppColors.warningBg, borderRadius: BorderRadius.circular(6)),
+      child: const Text(
+        '⟳ not sent yet',
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.warning),
+      ),
+    );
+  }
+}
+
+class _CancelledTag extends StatelessWidget {
+  const _CancelledTag();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(color: const Color(0xFFFEE4E2), borderRadius: BorderRadius.circular(6)),
+      child: const Text(
+        'CANCELLED',
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.danger),
       ),
     );
   }

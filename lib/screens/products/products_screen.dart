@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/product.dart';
 import '../../services/catalog_service.dart';
@@ -20,9 +21,48 @@ class ProductsScreen extends StatefulWidget {
   State<ProductsScreen> createState() => _ProductsScreenState();
 }
 
+/// The sort choices, in menu order. [short] is what the sort button shows,
+/// so the cashier always knows why the list is in the order it is.
+enum _Sort {
+  newest('Recently added', 'Newest'),
+  name('Name A–Z', 'A–Z'),
+  priceUp('Price: low to high', 'Price ↑'),
+  priceDown('Price: high to low', 'Price ↓'),
+  lowStock('Lowest stock first', 'Low stock'),
+  bestSellers('Best sellers', 'Best sellers');
+
+  const _Sort(this.label, this.short);
+  final String label;
+  final String short;
+}
+
 class _ProductsScreenState extends State<ProductsScreen> {
+  static const _sortKey = 'productSort';
+
   final _search = TextEditingController();
   bool _lowOnly = false;
+  _Sort _sort = _Sort.newest;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSort();
+  }
+
+  /// The choice is per phone (SharedPreferences), not per shop: the owner
+  /// may like A–Z on their phone while the till phone shows newest.
+  Future<void> _loadSort() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_sortKey);
+    final match = _Sort.values.where((s) => s.name == saved);
+    if (match.isNotEmpty && mounted) setState(() => _sort = match.first);
+  }
+
+  Future<void> _setSort(_Sort s) async {
+    setState(() => _sort = s);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_sortKey, s.name);
+  }
 
   @override
   void dispose() {
@@ -92,11 +132,34 @@ class _ProductsScreenState extends State<ProductsScreen> {
 
   List<Product> _filter(List<Product> all) {
     final q = _search.text.trim().toLowerCase();
-    return all.where((p) {
+    final list = all.where((p) {
       if (_lowOnly && !p.isLow) return false;
       if (q.isEmpty) return true;
-      return p.name.toLowerCase().contains(q) || p.code.toLowerCase().contains(q);
+      // Brand too, so typing "FCL" lists every FCL product.
+      return p.name.toLowerCase().contains(q) ||
+          p.code.toLowerCase().contains(q) ||
+          (p.source?.toLowerCase().contains(q) ?? false);
     }).toList();
+
+    // A product added offline has no server date yet: count it as newest.
+    final now = DateTime.now();
+    int byName(Product a, Product b) => a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    list.sort((a, b) {
+      // Hidden products always sink to the bottom, whatever the sort.
+      if (a.active != b.active) return a.active ? -1 : 1;
+      final r = switch (_sort) {
+        _Sort.newest => (b.createdAt ?? now).compareTo(a.createdAt ?? now),
+        _Sort.name => 0,
+        _Sort.priceUp => a.price.compareTo(b.price),
+        _Sort.priceDown => b.price.compareTo(a.price),
+        _Sort.lowStock => a.stock.compareTo(b.stock),
+        _Sort.bestSellers => b.soldCount.compareTo(a.soldCount),
+      };
+      // Ties (same price, same stock...) fall back to A–Z, so the order
+      // never jumps around between refreshes.
+      return r != 0 ? r : byName(a, b);
+    });
+    return list;
   }
 
   @override
@@ -150,7 +213,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                   controller: _search,
                   onChanged: (_) => setState(() {}),
                   decoration: InputDecoration(
-                    hintText: 'Search name or barcode',
+                    hintText: 'Search name, brand or barcode',
                     prefixIcon: const Icon(Icons.search),
                     suffixIcon: _search.text.isEmpty
                         ? IconButton(
@@ -178,9 +241,46 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       checkmarkColor: AppColors.warning,
                     ),
                     const SizedBox(width: 12),
-                    Text(
-                      '${shown.length} of $activeCount products',
-                      style: const TextStyle(color: AppColors.inkSoft),
+                    Expanded(
+                      child: Text(
+                        '${shown.length} of $activeCount',
+                        style: const TextStyle(color: AppColors.inkSoft),
+                      ),
+                    ),
+                    PopupMenuButton<_Sort>(
+                      tooltip: 'Sort products',
+                      initialValue: _sort,
+                      onSelected: _setSort,
+                      itemBuilder: (_) => [
+                        for (final s in _Sort.values)
+                          PopupMenuItem(
+                            value: s,
+                            child: Row(
+                              children: [
+                                Expanded(child: Text(s.label)),
+                                if (s == _sort) const Icon(Icons.check, size: 18, color: AppColors.primary),
+                              ],
+                            ),
+                          ),
+                      ],
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: AppColors.primary, width: 1.5),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.sort, size: 18, color: AppColors.primary),
+                            const SizedBox(width: 4),
+                            Text(
+                              _sort.short,
+                              style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -221,7 +321,6 @@ class _ProductRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = product;
-    final unit = p.isKg ? ' kg' : '';
     return InkWell(
       onTap: onEdit, // tapping the row still edits, as before
       child: Opacity(
@@ -236,7 +335,25 @@ class _ProductRow extends StatelessWidget {
                   children: [
                     Text(p.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                     const SizedBox(height: 3),
-                    Text(p.code, style: AppTheme.mono(size: 12, weight: FontWeight.w400, color: AppColors.inkSoft)),
+                    // "FCL · 2000000001210": brand first, in ink, because
+                    // it's the part people actually read; the code is grey.
+                    Text.rich(
+                      TextSpan(
+                        children: [
+                          if (p.source != null)
+                            TextSpan(
+                              text: '${p.source} · ',
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.ink),
+                            ),
+                          TextSpan(
+                            text: p.code,
+                            style: AppTheme.mono(size: 12, weight: FontWeight.w400, color: AppColors.inkSoft),
+                          ),
+                        ],
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ],
                 ),
               ),
@@ -251,9 +368,9 @@ class _ProductRow extends StatelessWidget {
                   if (!p.active)
                     const _Tag(text: 'Hidden', fg: AppColors.inkSoft, bg: AppColors.surfaceMuted)
                   else if (p.isLow)
-                    _Tag(text: '${qty(p.stock)}$unit left', fg: AppColors.warning, bg: AppColors.warningBg)
+                    _Tag(text: '${p.stockText} left', fg: AppColors.warning, bg: AppColors.warningBg)
                   else
-                    Text('${qty(p.stock)}$unit in stock', style: const TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+                    Text('${p.stockText} in stock', style: const TextStyle(fontSize: 12, color: AppColors.inkSoft)),
                 ],
               ),
               const SizedBox(width: 4),

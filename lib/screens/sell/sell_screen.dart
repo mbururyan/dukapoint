@@ -3,18 +3,25 @@ import 'package:flutter/material.dart';
 import '../../models/product.dart';
 import '../../services/cart_service.dart';
 import '../../services/catalog_service.dart';
+import '../../services/plan_service.dart';
+import '../../services/printer_service.dart';
+import '../../services/session_service.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/counting.dart';
 import '../../utils/format.dart';
 import '../../widgets/hid_scanner_listener.dart';
 import '../../widgets/owner_pin_sheet.dart';
+import '../../widgets/printer_chip.dart';
 import '../../widgets/scanner_view.dart';
+import '../../widgets/status_banners.dart';
 import '../products/product_form_screen.dart';
 import '../products/product_picker_sheet.dart';
 import 'checkout_screen.dart';
 import 'qty_dialog.dart';
 
-/// Wireframe 3. Camera on top, cart below, total and Charge at the bottom.
-/// Items arrive three ways: camera scan, scanner gun, or "No barcode".
+/// Wireframe 3. Camera on top, a big search bar under it, cart below,
+/// total and Charge at the bottom. Items arrive three ways: camera scan,
+/// scanner gun, or search (for shops and items with no barcodes).
 class SellScreen extends StatefulWidget {
   const SellScreen({super.key, required this.active});
 
@@ -35,11 +42,24 @@ class _SellScreenState extends State<SellScreen> {
   bool _cameraOn = true;
 
   @override
+  void initState() {
+    super.initState();
+    // App just opened on Sell: connect to the printer now, in the
+    // background, so the first receipt of the day doesn't wait for it.
+    PrinterService.instance.checkStatus();
+  }
+
+  @override
   void didUpdateWidget(SellScreen old) {
     super.didUpdateWidget(old);
     // Coming back to the Sell tab: take keyboard focus back so the scanner
     // gun's "typing" lands here, not in a search box on another tab.
-    if (widget.active && !old.active) _gunFocus.requestFocus();
+    if (widget.active && !old.active) {
+      _gunFocus.requestFocus();
+      // Back on Sell: make sure the printer is still there before the next
+      // customer, not when their receipt fails.
+      PrinterService.instance.checkStatus();
+    }
   }
 
   @override
@@ -104,7 +124,7 @@ class _SellScreenState extends State<SellScreen> {
     if (product != null) await _addProduct(product);
   }
 
-  Future<void> _noBarcode() async {
+  Future<void> _search() async {
     final product = await showProductPicker(context, title: 'Add which item?');
     if (product != null && mounted) await _addProduct(product);
   }
@@ -139,7 +159,7 @@ class _SellScreenState extends State<SellScreen> {
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('Clear the cart?'),
-        content: Text('${_cart.itemCount} items will be removed.'),
+        content: Text('${_cartCount()} will be removed.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
           TextButton(
@@ -153,11 +173,22 @@ class _SellScreenState extends State<SellScreen> {
     if (yes == true) _cart.clear();
   }
 
+  bool get _canSell {
+    final shop = SessionService.instance.shop;
+    return shop == null || PlanService.instance.stateFor(shop).canSell;
+  }
+
   void _charge() {
+    if (!_canSell) return; // the button is already off; belt and braces
     // Checkout reads the cart from CartService directly, so nothing needs
     // passing in. It replaces itself with the receipt when payment is done.
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CheckoutScreen()));
   }
+
+  /// "4 bags, 1 packet" for the cart header and the Clear question.
+  String _cartCount() => countSummary(
+        _cart.lines.map((l) => (qty: l.qty, unit: l.product.unit, word: l.product.countedAs)),
+      );
 
   void _snack(String text) {
     ScaffoldMessenger.of(context)
@@ -176,10 +207,18 @@ class _SellScreenState extends State<SellScreen> {
       enabled: widget.active,
       onScan: _onCode,
       child: ListenableBuilder(
-        listenable: _cart,
+        // The plan too: if it lapses while the app is open, Charge turns
+        // off without a restart.
+        listenable: Listenable.merge([_cart, PlanService.instance, SessionService.instance]),
         builder: (context, _) => Column(
           children: [
-            SizedBox(height: 210, child: _cameraArea()),
+            // Both hide themselves when there's nothing to say.
+            const PlanBanner(),
+            const SyncBanner(),
+            // 150, down from 210: still plenty for a barcode, and it makes
+            // room for the search bar without pushing the cart down.
+            SizedBox(height: 150, child: _cameraArea()),
+            _searchBar(),
             _cartHeader(),
             const Divider(height: 1),
             Expanded(child: _cartList()),
@@ -235,26 +274,62 @@ class _SellScreenState extends State<SellScreen> {
     );
   }
 
+  /// Big, tinted, and worded as a normal way to sell, not a fallback: a
+  /// feeds distributor with no barcodes should feel at home using only this.
+  Widget _searchBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+      child: Material(
+        color: AppColors.surfaceMuted,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: const BorderSide(color: AppColors.primary, width: 2),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: _search,
+          child: const SizedBox(
+            height: 56,
+            child: Row(
+              children: [
+                SizedBox(width: 14),
+                Icon(Icons.search, color: AppColors.primary, size: 26),
+                SizedBox(width: 10),
+                Text('Search item', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                // Flexible: on a narrow phone this part trims with "…"
+                // instead of overflowing the bar.
+                Flexible(
+                  child: Text(
+                    '  · no barcode needed',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 14, color: AppColors.inkSoft),
+                  ),
+                ),
+                SizedBox(width: 12),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _cartHeader() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
       child: Row(
         children: [
           Expanded(
             child: Text(
-              'Cart · ${_cart.itemCount} ${_cart.itemCount == 1 ? 'item' : 'items'}',
+              _cart.isEmpty ? 'Cart' : 'Cart · ${_cartCount()}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
             ),
           ),
-          OutlinedButton.icon(
-            onPressed: _noBarcode,
-            icon: const Icon(Icons.search, size: 18),
-            label: const Text('No barcode'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppColors.ink,
-              visualDensity: VisualDensity.compact,
-            ),
-          ),
+          // Where the cashier's eyes already are; hides itself on the web.
+          const PrinterChip(),
           TextButton(
             onPressed: _cart.isEmpty ? null : _clear,
             style: TextButton.styleFrom(foregroundColor: AppColors.danger),
@@ -271,7 +346,7 @@ class _SellScreenState extends State<SellScreen> {
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text(
-            'Cart is empty.\nScan an item, use the scanner gun, or tap "No barcode".',
+            'Cart is empty.\nScan an item, use the scanner gun, or search above.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 16, height: 1.5, color: AppColors.inkSoft),
           ),
@@ -316,8 +391,16 @@ class _SellScreenState extends State<SellScreen> {
           ),
           const SizedBox(height: 8),
           FilledButton(
-            onPressed: _cart.isEmpty ? null : _charge,
-            child: Text(_cart.isEmpty ? 'Charge' : 'Charge ${ksh(_cart.total)}'),
+            // Only Charge stops when the plan lapses. Scanning, the cart,
+            // stock and history all keep working, so the shop isn't blind.
+            onPressed: (_cart.isEmpty || !_canSell) ? null : _charge,
+            child: Text(
+              !_canSell
+                  ? 'Sales paused'
+                  : _cart.isEmpty
+                      ? 'Charge'
+                      : 'Charge ${ksh(_cart.total)}',
+            ),
           ),
         ],
       ),
@@ -367,48 +450,85 @@ class _LineRow extends StatelessWidget {
                 // allowed (the stock count may simply be out of date).
                 if (over)
                   Text(
-                    'Only ${qty(stock!)}${p.isKg ? ' kg' : ''} in stock',
+                    'Only ${countOf(stock!, unit: p.unit, word: p.countedAs)} in stock',
                     style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.warning),
                   ),
               ],
             ),
           ),
-          Container(
-            decoration: BoxDecoration(
-              border: Border.all(color: AppColors.border, width: 1.5),
-              borderRadius: BorderRadius.circular(10),
+          // Two big square buttons with the quantity between them. Red for
+          // less, green for more, and the − / + symbols too, so colour is
+          // never the only clue (about 1 in 12 men can't tell red from green).
+          const SizedBox(width: 8),
+          _StepButton(
+            tooltip: p.isKg ? 'Remove' : 'One less',
+            icon: p.isKg ? Icons.close : Icons.remove,
+            fg: AppColors.danger,
+            bg: _dangerBg,
+            onTap: onMinus,
+          ),
+          InkWell(
+            onTap: onQtyTap,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              constraints: const BoxConstraints(minWidth: 40),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+              alignment: Alignment.center,
+              child: Text(
+                p.isKg ? '${qty(line.qty)}kg' : qty(line.qty),
+                style: AppTheme.mono(size: 17),
+              ),
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  tooltip: p.isKg ? 'Remove' : 'One less',
-                  onPressed: onMinus,
-                  icon: Icon(p.isKg ? Icons.close : Icons.remove, size: 20),
-                ),
-                InkWell(
-                  onTap: onQtyTap,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
-                    child: Text(
-                      p.isKg ? '${qty(line.qty)}kg' : qty(line.qty),
-                      style: AppTheme.mono(size: 16),
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: p.isKg ? 'Change weight' : 'One more',
-                  onPressed: onPlus,
-                  icon: Icon(p.isKg ? Icons.edit_outlined : Icons.add, size: 20),
-                ),
-              ],
-            ),
+          ),
+          _StepButton(
+            tooltip: p.isKg ? 'Change weight' : 'One more',
+            icon: p.isKg ? Icons.edit_outlined : Icons.add,
+            fg: AppColors.success,
+            bg: AppColors.successBg,
+            onTap: onPlus,
           ),
           SizedBox(
-            width: 78,
-            child: Text(kes(line.total), textAlign: TextAlign.right, style: AppTheme.mono(size: 16)),
+            width: 70,
+            child: Text(kes(line.total), textAlign: TextAlign.right, style: AppTheme.mono(size: 15)),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// Same pale red as the expired-plan tile and the cancelled-sale strip.
+const _dangerBg = Color(0xFFFEE4E2);
+
+/// A 46px square tap target, comfortably above the 44px minimum for
+/// fingers, so a busy cashier doesn't hit + when they meant −.
+class _StepButton extends StatelessWidget {
+  const _StepButton({
+    required this.tooltip,
+    required this.icon,
+    required this.fg,
+    required this.bg,
+    required this.onTap,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final Color fg;
+  final Color bg;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: SizedBox(width: 46, height: 46, child: Icon(icon, color: fg, size: 26)),
+        ),
       ),
     );
   }

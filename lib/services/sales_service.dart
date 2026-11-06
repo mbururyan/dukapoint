@@ -6,7 +6,7 @@ import 'cart_service.dart';
 import 'device_service.dart';
 import 'session_service.dart';
 
-/// Saves finished sales and updates stock.
+/// Saves finished sales, voids them, and keeps stock in step.
 class SalesService {
   SalesService._();
   static final instance = SalesService._();
@@ -42,6 +42,8 @@ class SalesService {
             productId: l.code,
             name: l.product.name,
             unit: l.product.unit,
+            countedAs: l.product.countedAs,
+            source: l.product.source,
             qty: l.qty,
             price: l.unitPrice,
             buyPrice: l.product.buyPrice,
@@ -79,6 +81,79 @@ class SalesService {
     return sale;
   }
 
+  /// Cancels a paid sale and puts every item's stock back, logging each
+  /// return in Stock history. Returns the cancelled sale straight away,
+  /// even offline, so the receipt can show CANCELLED at once.
+  ///
+  /// Call only after the owner has approved (requireOwner). The owner is
+  /// recorded as approver; whoever is on shift is recorded as requester.
+  Sale voidSale(Sale sale, {required String reason, String? note}) {
+    final session = SessionService.instance;
+    final shopRef = _db.collection('shops').doc(session.shop!.id);
+    final owner = session.ownerRecord;
+    final approver = {'id': owner?.id ?? '', 'name': owner?.name ?? ''};
+    final requester = session.actor;
+    final now = DateTime.now();
+    final cleanNote = (note == null || note.trim().isEmpty) ? null : note.trim();
+
+    // ONE batch, unlike record(): all of it happens or none of it does.
+    // If the server refuses the cancel (already voided on another phone,
+    // or older than 8 days), the stock must NOT come back either, or the
+    // shelf count would be wrong twice over.
+    final batch = _db.batch();
+
+    batch.update(shopRef.collection('sales').doc(sale.id), {
+      // Exactly these keys and nothing else: the security rules reject a
+      // cancel that touches the total, the items or anything else.
+      'status': 'cancelled',
+      'cancelReason': reason,
+      'cancelNote': cleanNote,
+      'cancelledBy': approver,
+      'requestedBy': requester,
+      'cancelledAtClient': Timestamp.fromDate(now),
+      'cancelledAt': FieldValue.serverTimestamp(),
+    });
+
+    for (final i in sale.items) {
+      // Increment, not "set": a sale of the same item on another phone at
+      // the same moment must still count.
+      batch.update(shopRef.collection('products').doc(i.productId), {
+        'stock': FieldValue.increment(i.qty),
+        // soldCount is NOT reduced: the cancelled sale still mentions this
+        // product, so it must stay protected from deletion.
+        'updatedBy': approver,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      // Same shape as CatalogService's history entries, plus the receipt.
+      batch.set(shopRef.collection('stockMoves').doc(), {
+        'productId': i.productId,
+        'productName': i.name,
+        'unit': i.unit,
+        'qty': i.qty,
+        'type': 'void',
+        'supplier': null,
+        'unitCost': null,
+        'note': cleanNote == null ? reason : '$reason: $cleanNote',
+        'receiptNo': sale.receiptNo,
+        'saleId': sale.id,
+        'by': approver,
+        'createdAtClient': Timestamp.fromDate(now),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    // Not awaited: works offline, sent when the network is back.
+    batch.commit().then((_) {}, onError: (e) => debugPrint('Void of ${sale.receiptNo} failed: $e'));
+
+    return sale.cancelledCopy(
+      reason: reason,
+      note: cleanNote,
+      approvedBy: approver['name']!,
+      requestedBy: requester['name'] ?? '',
+      when: now,
+    );
+  }
+
   /// Every sale from [fromDay] (inclusive) up to now, live.
   ///
   /// Works because dayKeys are written year-month-day ("2026-10-21"), so
@@ -99,13 +174,16 @@ class SalesService {
 
   /// One day's sales, live, for the Sales tab. Equality on one field:
   /// no special Firestore index needed.
+  ///
+  /// Includes metadata changes so a sale's "not sent yet" tag clears the
+  /// moment it reaches the server (that's a metadata change, not a data one).
   Stream<List<Sale>> salesOn(String day) {
     return _db
         .collection('shops')
         .doc(SessionService.instance.shop!.id)
         .collection('sales')
         .where('dayKey', isEqualTo: day)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .map((q) => q.docs.map(Sale.fromDoc).toList());
   }
 

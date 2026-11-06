@@ -26,6 +26,15 @@ enum PrintOutcome {
       };
 }
 
+/// What the chip on Sell shows. Words go with every state on screen.
+enum PrinterStatus {
+  none, // no printer chosen on this phone
+  checking, // trying to reach it right now
+  ready, // connected: the next receipt prints at once
+  off, // chosen, but can't be reached (off, flat, out of range)
+  unsupported, // the web version: no Bluetooth printing
+}
+
 class SavedPrinter {
   const SavedPrinter({required this.name, required this.mac});
   final String name;
@@ -54,6 +63,11 @@ class PrinterService extends ChangeNotifier {
   /// show a spinner instead of being tapped again.
   bool busy = false;
 
+  /// Last known state of the chosen printer. Updated when Sell opens
+  /// ([checkStatus]) and after every print, never on a timer, so it costs
+  /// no battery while nothing is happening.
+  PrinterStatus status = PrinterStatus.none;
+
   Generator? _generator;
 
   // Print jobs run one at a time. Two quick taps (or an auto-print plus a
@@ -73,6 +87,54 @@ class PrinterService extends ChangeNotifier {
       printer = SavedPrinter(name: _prefs.getString(_nameKey) ?? 'Printer', mac: mac);
     }
     autoPrint = _prefs.getBool(_autoKey) ?? true;
+    status = !supported
+        ? PrinterStatus.unsupported
+        : printer == null
+            ? PrinterStatus.none
+            : PrinterStatus.off; // until the first check says otherwise
+  }
+
+  /// Quietly connects to the chosen printer, if it isn't already. Called
+  /// when Sell opens, so the first receipt of the day prints at once and a
+  /// switched-off printer shows as Off before the first customer, not after.
+  /// Also behind the chip's Reconnect button.
+  Future<void> checkStatus() {
+    if (!supported) return _set(PrinterStatus.unsupported);
+    final p = printer;
+    if (p == null) return _set(PrinterStatus.none);
+    if (status == PrinterStatus.checking) return Future.value();
+    _setStatus(PrinterStatus.checking);
+    // Through the same one-at-a-time queue as printing, so a check never
+    // talks to the printer in the middle of a receipt.
+    return _enqueue(() async {
+      if (await _checkPhone() != null) return false;
+      try {
+        if (await PrintBluetoothThermal.connectionStatus) return true;
+        return await PrintBluetoothThermal.connect(macPrinterAddress: p.mac)
+            .timeout(const Duration(seconds: 8), onTimeout: () => false);
+      } catch (_) {
+        return false;
+      }
+    }).then((ok) => _setStatus(ok ? PrinterStatus.ready : PrinterStatus.off));
+  }
+
+  Future<void> _set(PrinterStatus s) {
+    _setStatus(s);
+    return Future.value();
+  }
+
+  void _setStatus(PrinterStatus s) {
+    if (status == s) return;
+    status = s;
+    notifyListeners();
+  }
+
+  /// Runs [job] after any job already talking to the printer.
+  Future<T> _enqueue<T>(Future<T> Function() job) {
+    final run = _queue.then((_) => job());
+    // The next job waits for this one whether it worked or not.
+    _queue = run.then((_) {}, onError: (_) {});
+    return run;
   }
 
   // -------------------------------------------------------------------
@@ -106,7 +168,9 @@ class PrinterService extends ChangeNotifier {
     printer = SavedPrinter(name: device.name, mac: device.macAdress);
     await _prefs.setString(_macKey, device.macAdress);
     await _prefs.setString(_nameKey, device.name);
+    status = PrinterStatus.off;
     notifyListeners();
+    checkStatus(); // connect now, so the chip turns Ready by itself
   }
 
   Future<void> forget() async {
@@ -114,6 +178,7 @@ class PrinterService extends ChangeNotifier {
     printer = null;
     await _prefs.remove(_macKey);
     await _prefs.remove(_nameKey);
+    status = PrinterStatus.none;
     notifyListeners();
   }
 
@@ -135,10 +200,15 @@ class PrinterService extends ChangeNotifier {
   /// Sends ready-made ESC/POS bytes. Never throws: every problem comes
   /// back as a [PrintOutcome] the screen can show.
   Future<PrintOutcome> printBytes(List<int> bytes) {
-    final job = _queue.then((_) => _send(bytes));
-    // The next job waits for this one whether it worked or not.
-    _queue = job.then((_) {}, onError: (_) {});
-    return job;
+    return _enqueue(() => _send(bytes)).then((outcome) {
+      // Every print is also a free status check for the chip.
+      if (outcome == PrintOutcome.printed) {
+        _setStatus(PrinterStatus.ready);
+      } else if (outcome == PrintOutcome.unreachable || outcome == PrintOutcome.bluetoothOff) {
+        _setStatus(PrinterStatus.off);
+      }
+      return outcome;
+    });
   }
 
   Future<PrintOutcome> _send(List<int> bytes) async {
