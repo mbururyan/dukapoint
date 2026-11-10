@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../screens/owner/inventory_screen.dart';
+import '../screens/owner/sales_summary_screen.dart';
+import '../services/catalog_service.dart';
 import '../services/device_service.dart';
 import '../services/plan_service.dart';
 import '../services/printer_service.dart';
@@ -8,10 +11,12 @@ import '../services/session_service.dart';
 import '../services/sync_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/printer_chip.dart';
+import '../widgets/owner_pin_check.dart';
 
 /// The ☰ menu, on every tab. Quick things anyone on shift may need, so
 /// they don't hunt through the Owner tab: the printer now, incoming M-Pesa
-/// payments after Daraja, and a way to reach you.
+/// payments after Daraja, and a way to reach you. Plus two owner pages
+/// (Sales summary, Inventory) behind the owner PIN.
 class AppDrawer extends StatelessWidget {
   const AppDrawer({super.key, required this.onSwitchCashier});
 
@@ -34,9 +39,9 @@ class AppDrawer extends StatelessWidget {
 
     return Drawer(
       child: ListenableBuilder(
-        // Every line here is live: printer, sync and plan can all change
-        // while the drawer is open.
-        listenable: Listenable.merge([session, printers, sync, PlanService.instance]),
+        // Every line here is live: printer, sync, plan and stock counts can
+        // all change while the drawer is open.
+        listenable: Listenable.merge([session, printers, sync, PlanService.instance, CatalogService.instance]),
         builder: (context, _) {
           final shop = session.shop;
           final plan = shop == null ? null : PlanService.instance.stateFor(shop);
@@ -90,6 +95,25 @@ class AppDrawer extends StatelessWidget {
                       closeThen(() => showPrinterSheet(ctx));
                     },
                   ),
+
+                // ---- Owner pages ----
+                // Counts only, never money: cashiers open this drawer too.
+                _ownerTile(
+                  context,
+                  icon: Icons.insights_outlined,
+                  title: 'Sales summary',
+                  info: null,
+                  reason: 'to see sales',
+                  page: const SalesSummaryScreen(),
+                ),
+                _ownerTile(
+                  context,
+                  icon: Icons.warehouse_outlined,
+                  title: 'Inventory',
+                  info: _stockCounts(),
+                  reason: 'to see inventory',
+                  page: const InventoryScreen(),
+                ),
 
                 // ---- M-Pesa payments (after Daraja) ----
                 const ListTile(
@@ -151,6 +175,50 @@ class AppDrawer extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+
+  /// "2 out, 4 low", or null when nothing needs attention. Same rules as
+  /// the Products tab and the Inventory page, so the numbers always agree.
+  String? _stockCounts() {
+    var out = 0, low = 0;
+    for (final p in CatalogService.instance.products) {
+      if (!p.active) continue;
+      if (p.stock <= 0) {
+        out++;
+      } else if (p.stock <= p.lowStockAt) {
+        low++;
+      }
+    }
+    final parts = [if (out > 0) '$out out', if (low > 0) '$low low'];
+    return parts.isEmpty ? null : parts.join(', ');
+  }
+
+  /// An owner page in the drawer. The lock only shows when a PIN will be
+  /// asked; when the owner is on shift it opens straight away.
+  Widget _ownerTile(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String? info,
+    required String reason,
+    required Widget page,
+  }) {
+    final open = SessionService.instance.ownerAccess;
+    final sub = [if (info != null) info, if (!open) 'Owner PIN'].join(' · ');
+    return ListTile(
+      leading: Icon(icon),
+      title: Text(title),
+      subtitle: sub.isEmpty ? null : Text(sub),
+      trailing: open ? null : const Icon(Icons.lock_outline, size: 18, color: AppColors.inkSoft),
+      onTap: () {
+        // The navigator's context outlives the drawer; the drawer's doesn't.
+        final ctx = Navigator.of(context).context;
+        Navigator.pop(context);
+        confirmOwnerPin(ctx, reason: reason).then((ok) {
+          if (ok && ctx.mounted) Navigator.of(ctx).push(MaterialPageRoute(builder: (_) => page));
+        });
+      },
     );
   }
 

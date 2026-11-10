@@ -1,25 +1,29 @@
 import 'package:flutter/material.dart';
 
 import '../../models/sale.dart';
-import '../../services/catalog_service.dart';
 import '../../services/plan_service.dart';
+import '../../services/printer_service.dart';
 import '../../services/sales_service.dart';
 import '../../services/session_service.dart';
 import '../../theme/app_theme.dart';
-import '../../utils/counting.dart';
 import '../../utils/format.dart';
+import '../../widgets/printer_chip.dart';
+import '../../widgets/sales_charts.dart';
 import '../../widgets/status_banners.dart';
-import '../sell/receipt_screen.dart';
-import 'dashboard_stats.dart';
 import 'printer_screen.dart';
 import 'renew_sheet.dart';
+import 'sales_summary_screen.dart';
+import 'sales_trend.dart';
 import 'shop_settings_screen.dart';
 import 'staff_screen.dart';
 import 'stock_history_screen.dart';
+import 'inventory_screen.dart';
 
-/// Wireframe 9: the owner's view. Sales for a period, how they were paid,
-/// who sold, what sold, what's running low, and the plan status.
-/// Live: a sale rung up on the till phone appears here within seconds.
+
+/// Wireframe G1: the Owner tab as a front door. Today's sales and the
+/// week's shape up top, then a grid of tiles that each open their own page.
+/// The detail lives in those pages; this screen only answers "how are we
+/// doing, and is anything wrong?".
 class OwnerHome extends StatefulWidget {
   const OwnerHome({super.key});
 
@@ -27,463 +31,257 @@ class OwnerHome extends StatefulWidget {
   State<OwnerHome> createState() => _OwnerHomeState();
 }
 
-enum _Range { today, week, month }
-
 class _OwnerHomeState extends State<OwnerHome> {
-  _Range _range = _Range.today;
-  late Stream<List<Sale>> _sales;
+  // One listener for the last 7 days, made once. It covers the chart,
+  // today's total, "vs yesterday" and today's voids, so this tab costs one
+  // query however much it shows.
+  late final Stream<List<Sale>> _week = SalesService.instance.salesFrom(
+    SalesService.dayKey(_daysAgo(6)),
+  );
 
-  @override
-  void initState() {
-    super.initState();
-    _sales = _streamFor(_range);
-  }
-
-  /// The first day of the range, as a dayKey. "7 days" means today plus
-  /// the six before it, so it always shows a full week whatever the weekday.
-  Stream<List<Sale>> _streamFor(_Range r) {
+  static DateTime _daysAgo(int n) {
     final now = DateTime.now();
-    final from = switch (r) {
-      _Range.today => now,
-      _Range.week => now.subtract(const Duration(days: 6)),
-      _Range.month => DateTime(now.year, now.month, 1),
-    };
-    return SalesService.instance.salesFrom(SalesService.dayKey(from));
+    return DateTime(now.year, now.month, now.day - n);
   }
 
-  void _pick(_Range r) {
-    if (r == _range) return;
-    setState(() {
-      _range = r;
-      // A new listener only when the range changes, never on every redraw.
-      _sales = _streamFor(r);
-    });
-  }
-
-  String get _rangeLabel => switch (_range) {
-        _Range.today => 'today',
-        _Range.week => 'last 7 days',
-        _Range.month => 'this month',
-      };
+  void _open(Widget page) => Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
 
   @override
   Widget build(BuildContext context) {
-    final session = SessionService.instance;
-    final ownerOnShift = session.current?.isOwner ?? false;
-
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        SegmentedButton<_Range>(
-          segments: const [
-            ButtonSegment(value: _Range.today, label: Text('Today')),
-            ButtonSegment(value: _Range.week, label: Text('7 days')),
-            ButtonSegment(value: _Range.month, label: Text('This month')),
-          ],
-          selected: {_range},
-          onSelectionChanged: (s) => _pick(s.first),
-        ),
-        const SizedBox(height: 12),
-
         StreamBuilder<List<Sale>>(
-          stream: _sales,
+          stream: _week,
           builder: (context, snap) {
             if (snap.hasError) {
-              return _Card(child: Text('Could not load sales.\n${snap.error}'));
+              return _SalesHero.message('Could not load sales.\n${snap.error}', onTap: () => _open(const SalesSummaryScreen()));
             }
             if (!snap.hasData) {
-              return const _Card(child: Center(child: CircularProgressIndicator()));
+              return _SalesHero.message(null, onTap: () => _open(const SalesSummaryScreen()));
             }
-            final catalog = CatalogService.instance;
-            final stats = DashboardStats.from(
-              snap.data!,
-              currentSourceOf: (id) => catalog.byCode(id)?.source,
-            );
+            final sales = snap.data!;
+            final todayKey = SalesService.dayKey(DateTime.now());
+            final voided = SalesTrend.voidedOn(sales, todayKey);
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _SalesCard(stats: stats, rangeLabel: _rangeLabel),
-                const SizedBox(height: 12),
-                const _AlertsRow(),
-                // Only when there's something to see: a permanent "0 voids"
-                // tile would teach the owner to stop looking at it.
-                if (stats.voided.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  _VoidsTile(stats: stats, rangeLabel: _rangeLabel),
+                // Only on days with voids: a strip that's always there
+                // stops being read.
+                if (voided.isNotEmpty) ...[
+                  _VoidsStrip(voided: voided),
+                  const SizedBox(height: 10),
                 ],
-                if (!stats.isEmpty) ...[
-                  const SizedBox(height: 12),
-                  _ByCashierCard(stats: stats),
-                  if (stats.hasSources) ...[
-                    const SizedBox(height: 12),
-                    _BySourceCard(stats: stats, rangeLabel: _rangeLabel),
-                  ],
-                  const SizedBox(height: 12),
-                  _TopItemsCard(stats: stats),
-                ],
+                _SalesHero(sales: sales, onTap: () => _open(const SalesSummaryScreen())),
               ],
             );
           },
         ),
-
-        const SizedBox(height: 20),
-        _MenuTile(
-          icon: Icons.storefront_outlined,
-          title: 'Shop settings',
-          subtitle: 'Receipt header, M-Pesa details, owner PIN',
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ShopSettingsScreen())),
-        ),
-        _MenuTile(
-          icon: Icons.badge_outlined,
-          title: 'Cashiers',
-          subtitle: 'Add, deactivate, reset PINs, product access',
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const StaffScreen())),
-        ),
-        _MenuTile(
-          icon: Icons.history,
-          title: 'Stock history',
-          subtitle: 'Deliveries, corrections and voids, with who did them',
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const StockHistoryScreen())),
-        ),
-        _MenuTile(
-          icon: Icons.print_outlined,
-          title: 'Printer',
-          subtitle: "This phone's receipt printer, test print, auto-print",
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PrinterScreen())),
-        ),
-        // Only when a cashier is on shift and the owner unlocked this tab
-        // with their PIN: lets the owner close it before handing back.
-        if (!ownerOnShift)
-          _MenuTile(
-            icon: Icons.lock_outline,
-            title: 'Lock owner area',
-            subtitle: 'Also locks by itself when you leave this tab',
-            onTap: session.lockOwner,
+        const SizedBox(height: 10),
+        _pair(
+          _GridTile.featured(
+            icon: Icons.warehouse_outlined,
+            title: 'Inventory',
+            subtitle: 'Stock value, low and out, reorder',
+            // The page itself arrives in step 13b.
+            onTap: () => _open(const InventoryScreen()),
           ),
+          const _PlanTile(),
+        ),
+        const SizedBox(height: 10),
+        _pair(
+          _GridTile(
+            icon: Icons.history,
+            title: 'Stock history',
+            subtitle: 'Deliveries, fixes and voids',
+            onTap: () => _open(const StockHistoryScreen()),
+          ),
+          _GridTile(
+            icon: Icons.badge_outlined,
+            title: 'Cashiers',
+            subtitle: 'Add, PINs, product access',
+            onTap: () => _open(const StaffScreen()),
+          ),
+        ),
+        const SizedBox(height: 10),
+        _pair(
+          _GridTile(
+            icon: Icons.storefront_outlined,
+            title: 'Shop settings',
+            subtitle: 'Receipt, M-Pesa, owner PIN',
+            onTap: () => _open(const ShopSettingsScreen()),
+          ),
+          ListenableBuilder(
+            // Live, like the chip on Sell: the owner sees "Off" here the
+            // moment the printer drops, not after reopening the tab.
+            listenable: PrinterService.instance,
+            builder: (context, _) {
+              final p = PrinterService.instance;
+              final look = printerLook(p.status);
+              return _GridTile(
+                icon: Icons.print_outlined,
+                title: 'Printer',
+                subtitle: !p.supported
+                    ? 'Phone only'
+                    : p.printer == null
+                        ? 'None chosen'
+                        : '${look.label} · ${p.printer!.name}',
+                onTap: () => _open(const PrinterScreen()),
+              );
+            },
+          ),
+        ),
       ],
     );
   }
-}
 
-// -------------------------------------------------------------------------
-// Sales card: the headline number, the cash / M-Pesa split, profit
-// -------------------------------------------------------------------------
-
-class _SalesCard extends StatelessWidget {
-  const _SalesCard({required this.stats, required this.rangeLabel});
-
-  final DashboardStats stats;
-  final String rangeLabel;
-
-  @override
-  Widget build(BuildContext context) {
-    final s = stats;
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('Sales · $rangeLabel', style: const TextStyle(color: AppColors.inkSoft)),
-              Text('${s.count} ${s.count == 1 ? 'sale' : 'sales'}', style: const TextStyle(color: AppColors.inkSoft)),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(ksh(s.total), style: AppTheme.mono(size: 34)),
-          if (s.isEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text('No sales yet $rangeLabel.', style: const TextStyle(color: AppColors.inkSoft)),
-            )
-          else ...[
-            const SizedBox(height: 14),
-            _SplitBar(cash: s.cash, mpesa: s.mpesa),
-            const SizedBox(height: 10),
-            // The legend doubles as the table: every value is written out,
-            // so nobody has to judge amounts from bar lengths or colour.
-            _LegendRow(color: AppColors.cash, label: 'Cash', value: s.cash),
-            const SizedBox(height: 6),
-            _LegendRow(color: AppColors.mpesa, label: 'M-Pesa', value: s.mpesa),
-            const Divider(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('Est. profit'),
-                Text(ksh(s.profit), style: AppTheme.mono(size: 16)),
-              ],
-            ),
-            if (s.profitIsPartial)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  'Covers ${s.linesWithCost} of ${s.linesTotal} items sold. Add buying prices to the rest for a full figure.',
-                  style: const TextStyle(fontSize: 12, color: AppColors.inkSoft),
-                ),
-              ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// Two-part bar: cash then M-Pesa, each as long as its share.
-/// A 2px white gap separates them, and the ends are rounded.
-class _SplitBar extends StatelessWidget {
-  const _SplitBar({required this.cash, required this.mpesa});
-
-  final int cash;
-  final int mpesa;
-
-  @override
-  Widget build(BuildContext context) {
-    final total = cash + mpesa;
-    if (total == 0) return const SizedBox.shrink();
-    return Semantics(
-      label: 'Cash ${ksh(cash)}, M-Pesa ${ksh(mpesa)}',
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(4),
-        child: SizedBox(
-          height: 12,
-          child: Row(
-            children: [
-              if (cash > 0) Expanded(flex: cash, child: Container(color: AppColors.cash)),
-              if (cash > 0 && mpesa > 0) const SizedBox(width: 2),
-              if (mpesa > 0) Expanded(flex: mpesa, child: Container(color: AppColors.mpesa)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _LegendRow extends StatelessWidget {
-  const _LegendRow({required this.color, required this.label, required this.value});
-
-  final Color color;
-  final String label;
-  final int value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: 12,
-          height: 12,
-          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(3)),
-        ),
-        const SizedBox(width: 8),
-        Expanded(child: Text(label)),
-        // Values in ink, not in the series colour: amber text on white
-        // is too faint to read.
-        Text(ksh(value), style: AppTheme.mono(size: 15)),
-      ],
-    );
-  }
-}
-
-// -------------------------------------------------------------------------
-// Low stock + plan status
-// -------------------------------------------------------------------------
-
-class _AlertsRow extends StatelessWidget {
-  const _AlertsRow();
-
-  @override
-  Widget build(BuildContext context) {
-    final catalog = CatalogService.instance;
-
-    return ListenableBuilder(
-      // Plan and session too: a new paidUntil you set in the console shows
-      // up here without a restart.
-      listenable: Listenable.merge([catalog, SessionService.instance, PlanService.instance]),
-      builder: (context, _) {
-        final low = catalog.products.where((p) => p.isLow).toList();
-        final names = low.take(3).map((p) => p.name).join(', ');
-        final shop = SessionService.instance.shop;
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+  /// Two tiles side by side, as tall as the taller one, so a tile with a
+  /// two-line subtitle doesn't leave its neighbour looking short.
+  static Widget _pair(Widget a, Widget b) => IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: _Tile(
-                bg: low.isEmpty ? AppColors.surfaceMuted : AppColors.warningBg,
-                fg: low.isEmpty ? AppColors.ink : AppColors.warning,
-                icon: low.isEmpty ? Icons.check_circle_outline : Icons.warning_amber_rounded,
-                title: 'Low stock',
-                value: low.isEmpty ? 'All good' : '${low.length} ${low.length == 1 ? 'item' : 'items'}',
-                note: low.isEmpty ? 'Nothing below its warning level' : '$names${low.length > 3 ? '…' : ''}',
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: shop == null ? const SizedBox.shrink() : _PlanTile(state: PlanService.instance.stateFor(shop)),
-            ),
+            Expanded(child: a),
+            const SizedBox(width: 10),
+            Expanded(child: b),
           ],
-        );
-      },
-    );
-  }
+        ),
+      );
 }
 
-/// The plan, in the owner's words. Tapping opens Renew in every phase
-/// where paying makes sense, not only near the end: an owner who wants to
-/// pay early can.
-class _PlanTile extends StatelessWidget {
-  const _PlanTile({required this.state});
+// -------------------------------------------------------------------------
+// The big card: today's money and the last 7 days
+// -------------------------------------------------------------------------
 
-  final PlanState state;
+class _SalesHero extends StatelessWidget {
+  const _SalesHero({required List<Sale> this.sales, required this.onTap}) : message = null;
+
+  /// Loading (null) or an error, in the same frame so the screen doesn't jump.
+  const _SalesHero.message(this.message, {required this.onTap}) : sales = null;
+
+  final List<Sale>? sales;
+  final String? message;
+  final VoidCallback onTap;
+
+  static const _wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   @override
   Widget build(BuildContext context) {
-    final s = state;
-    final until = s.paidUntil;
-    const red = Color(0xFFFEE4E2);
-
-    // Status colours always come with an icon and words, never colour alone.
-    final tile = switch (s.phase) {
-      PlanPhase.unset => const _Tile(
-          bg: AppColors.surfaceMuted,
-          fg: AppColors.ink,
-          icon: Icons.help_outline,
-          title: 'DukaPoint plan',
-          value: 'Not set',
-          note: 'Contact DukaPoint',
-        ),
-      PlanPhase.active => _Tile(
-          bg: AppColors.successBg,
-          fg: AppColors.success,
-          icon: Icons.verified_outlined,
-          title: 'DukaPoint plan',
-          value: 'Active',
-          note: 'Paid until ${planDate(until!)}',
-        ),
-      PlanPhase.endingSoon => _Tile(
-          bg: AppColors.warningBg,
-          fg: AppColors.warning,
-          icon: Icons.schedule,
-          title: 'DukaPoint plan',
-          value: s.daysLeft == 0 ? 'Ends today' : '${s.daysLeft} ${s.daysLeft == 1 ? 'day' : 'days'} left',
-          note: 'Paid until ${planDate(until!)} · tap to renew',
-        ),
-      PlanPhase.grace => _Tile(
-          bg: red,
-          fg: AppColors.danger,
-          icon: Icons.error_outline,
-          title: 'DukaPoint plan',
-          value: 'Ended',
-          note: 'Sales pause ${planDate(s.pauseOn!)} · tap to renew',
-        ),
-      PlanPhase.paused => const _Tile(
-          bg: red,
-          fg: AppColors.danger,
-          icon: Icons.block,
-          title: 'DukaPoint plan',
-          value: 'Sales paused',
-          note: 'Tap to renew',
-        ),
-      PlanPhase.suspended => const _Tile(
-          bg: red,
-          fg: AppColors.danger,
-          icon: Icons.block,
-          title: 'DukaPoint plan',
-          value: 'On hold',
-          note: 'Contact DukaPoint',
-        ),
-    };
-
-    // Unset and suspended are yours to sort out, not something to pay for.
-    final canRenew = s.phase != PlanPhase.unset && s.phase != PlanPhase.suspended;
-    if (!canRenew) return tile;
-    return GestureDetector(onTap: () => showRenewSheet(context), child: tile);
-  }
-}
-
-class _Tile extends StatelessWidget {
-  const _Tile({
-    required this.bg,
-    required this.fg,
-    required this.icon,
-    required this.title,
-    required this.value,
-    required this.note,
-  });
-
-  final Color bg;
-  final Color fg;
-  final IconData icon;
-  final String title;
-  final String value;
-  final String note;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(14)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Material(
+      color: AppColors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: AppColors.primary, width: 2),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(icon, size: 18, color: fg),
-              const SizedBox(width: 6),
-              Expanded(child: Text(title, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: fg))),
+              Row(
+                children: [
+                  const _IconBox(icon: Icons.insights_outlined),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text('Sales summary', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  ),
+                  const Icon(Icons.chevron_right, color: AppColors.inkSoft),
+                ],
+              ),
+              const SizedBox(height: 10),
+              if (sales == null)
+                SizedBox(
+                  height: 150,
+                  child: Center(
+                    child: message == null
+                        ? const CircularProgressIndicator()
+                        : Text(message!, style: const TextStyle(color: AppColors.inkSoft)),
+                  ),
+                )
+              else
+                ..._body(sales!),
             ],
           ),
-          const SizedBox(height: 6),
-          Text(value, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: fg)),
-          const SizedBox(height: 2),
-          Text(note, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: fg)),
-        ],
+        ),
       ),
     );
   }
+
+  List<Widget> _body(List<Sale> sales) {
+    final now = DateTime.now();
+    final todayKey = SalesService.dayKey(now);
+    final count = SalesTrend.countOn(sales, todayKey);
+    final total = SalesTrend.totalOn(sales, todayKey);
+    final change = SalesTrend.changeVsYesterday(sales, now);
+    final days = SalesTrend.byDay(sales, DateTime(now.year, now.month, now.day - 6), now);
+
+    return [
+      Text(
+        'Today so far · $count ${count == 1 ? 'sale' : 'sales'}',
+        style: const TextStyle(fontSize: 13, color: AppColors.inkSoft),
+      ),
+      Text(ksh(total), style: AppTheme.mono(size: 30)),
+      if (change != null) ChangeLine(change: change, size: 12.5),
+      const SizedBox(height: 12),
+      Semantics(
+        // Screen readers get the numbers the bars stand for.
+        label: 'Last 7 days: ${days.map((d) => '${_wd[d.day.weekday - 1]} ${ksh(d.total)}').join(', ')}',
+        child: ExcludeSemantics(
+          child: ColumnBars(
+            values: [for (final d in days) d.total],
+            labels: [
+              for (var i = 0; i < days.length; i++) i == days.length - 1 ? 'Today' : _wd[days[i].day.weekday - 1],
+            ],
+            height: 80,
+            lastIsPartial: true,
+            // No onSelect: the whole card is one tap to Sales summary,
+            // where the chart can be read bar by bar.
+          ),
+        ),
+      ),
+    ];
+  }
 }
 
-// -------------------------------------------------------------------------
-// Voided sales: the anti-fraud alert
-// -------------------------------------------------------------------------
+/// "1 voided today · Ksh 2,500". Red, the anti-fraud alert: a cashier
+/// quietly voiding cash sales and pocketing the money is the classic
+/// till fraud, so the owner sees it the moment they open this tab.
+class _VoidsStrip extends StatelessWidget {
+  const _VoidsStrip({required this.voided});
 
-/// "2 voided sales · Ksh 3,400". Red so it's noticed even on a day the
-/// owner wasn't in the shop: a cashier quietly voiding cash sales and
-/// keeping the money is the classic till fraud this exists to catch.
-class _VoidsTile extends StatelessWidget {
-  const _VoidsTile({required this.stats, required this.rangeLabel});
-
-  final DashboardStats stats;
-  final String rangeLabel;
+  final List<Sale> voided;
 
   @override
   Widget build(BuildContext context) {
-    final n = stats.voided.length;
+    final n = voided.length;
+    final sum = voided.fold<int>(0, (s, v) => s + v.total);
     return Material(
       color: const Color(0xFFFEE4E2),
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(12),
       child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: () => _showList(context),
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => showVoidedSales(context, voided, 'today'),
         child: Padding(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
             children: [
-              const Icon(Icons.block, color: AppColors.danger),
-              const SizedBox(width: 10),
+              const Icon(Icons.block, size: 20, color: AppColors.danger),
+              const SizedBox(width: 8),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '$n voided ${n == 1 ? 'sale' : 'sales'} · ${ksh(stats.voidTotal)}',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.danger),
-                    ),
-                    Text(
-                      'Not counted in sales $rangeLabel. Tap to see which and why.',
-                      style: const TextStyle(fontSize: 13, color: AppColors.danger),
-                    ),
-                  ],
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: '$n voided today · ${ksh(sum)}',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const TextSpan(text: ' · tap to see why'),
+                    ],
+                  ),
+                  style: const TextStyle(fontSize: 13.5, color: AppColors.danger),
                 ),
               ),
               const Icon(Icons.chevron_right, color: AppColors.danger),
@@ -493,330 +291,192 @@ class _VoidsTile extends StatelessWidget {
       ),
     );
   }
+}
 
-  void _showList(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (sheetContext) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.6,
-        maxChildSize: 0.9,
-        builder: (_, scroll) => ListView(
-          controller: scroll,
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-          children: [
-            Text('Voided sales · $rangeLabel', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            for (final s in stats.voided)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Text(
-                  [
-                    s.receiptNo,
-                    s.cancelReason ?? 'No reason',
-                    if ((s.requestedByName ?? '').isNotEmpty) 'asked by ${s.requestedByName}',
-                    if (s.cancelledAt != null) dayTime(s.cancelledAt!),
-                  ].join(' · '),
-                ),
-                trailing: Text(ksh(s.total), style: AppTheme.mono(size: 15)),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => ReceiptScreen(sale: s, viewOnly: true)),
-                  );
-                },
-              ),
-          ],
-        ),
-      ),
+// -------------------------------------------------------------------------
+// The plan tile: colour-coded, always tappable to pay
+// -------------------------------------------------------------------------
+
+class _PlanTile extends StatelessWidget {
+  const _PlanTile();
+
+  static const _redBg = Color(0xFFFEE4E2);
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      // A new paidUntil set in the console turns this green without a restart.
+      listenable: Listenable.merge([SessionService.instance, PlanService.instance]),
+      builder: (context, _) {
+        final shop = SessionService.instance.shop;
+        if (shop == null) return const SizedBox.shrink();
+        final s = PlanService.instance.stateFor(shop);
+        final until = s.paidUntil;
+
+        // Green = fine, amber = last 7 days, red = act now. Every state has
+        // its own icon and words too, so colour never carries it alone.
+        // To make the last 7 days red instead of amber, change the two
+        // warning colours in the endingSoon line to _redBg / AppColors.danger.
+        final (bg, fg, icon, title, sub, button) = switch (s.phase) {
+          PlanPhase.unset => (AppColors.surfaceMuted, AppColors.ink, Icons.help_outline, 'Plan', 'Not set up yet', null),
+          PlanPhase.active => (
+              AppColors.successBg,
+              AppColors.success,
+              Icons.verified_outlined,
+              'Plan active',
+              'Paid to ${planDate(until!)}',
+              null,
+            ),
+          PlanPhase.endingSoon => (
+              AppColors.warningBg,
+              AppColors.warning,
+              Icons.schedule,
+              s.daysLeft == 0 ? 'Ends today' : 'Ends in ${s.daysLeft} ${s.daysLeft == 1 ? 'day' : 'days'}',
+              'Paid to ${planDate(until!)}',
+              'Renew',
+            ),
+          PlanPhase.grace => (
+              _redBg,
+              AppColors.danger,
+              Icons.error_outline,
+              'Plan ended',
+              'Selling pauses ${planDate(s.pauseOn!)}',
+              'Pay now',
+            ),
+          PlanPhase.paused => (_redBg, AppColors.danger, Icons.pause_circle_outline, 'Selling paused', 'Pay to unlock', 'Pay now'),
+          PlanPhase.suspended => (_redBg, AppColors.danger, Icons.block, 'On hold', 'Contact DukaPoint', null),
+        };
+
+        return _GridTile(
+          icon: icon,
+          title: title,
+          subtitle: sub,
+          bg: bg,
+          fg: fg,
+          button: button,
+          // Every state opens Renew: it shows the Paybill to pay early,
+          // and "contact DukaPoint" when payment details aren't set.
+          onTap: () => showRenewSheet(context),
+        );
+      },
     );
   }
 }
 
 // -------------------------------------------------------------------------
-// By cashier + top items
+// Tiles
 // -------------------------------------------------------------------------
 
-class _ByCashierCard extends StatelessWidget {
-  const _ByCashierCard({required this.stats});
+class _GridTile extends StatelessWidget {
+  const _GridTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.bg,
+    this.fg,
+    this.button,
+  }) : highlight = false;
 
-  final DashboardStats stats;
-
-  @override
-  Widget build(BuildContext context) {
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text('By cashier', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 10),
-          for (final c in stats.byCashier)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(text: c.name.isEmpty ? 'Unknown' : c.name),
-                          TextSpan(
-                            text: '  · ${c.sales} ${c.sales == 1 ? 'sale' : 'sales'}',
-                            style: const TextStyle(fontSize: 13, color: AppColors.inkSoft),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Text(ksh(c.total), style: AppTheme.mono(size: 15)),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Sales per brand: one ranked bar each, biggest first, amount and share
-/// written out so nobody has to judge bar lengths. Tap a brand to see its
-/// top three items. Blue on purpose: amber and green already mean cash and
-/// M-Pesa on this screen, and plum means "button".
-class _BySourceCard extends StatefulWidget {
-  const _BySourceCard({required this.stats, required this.rangeLabel});
-
-  final DashboardStats stats;
-  final String rangeLabel;
-
-  @override
-  State<_BySourceCard> createState() => _BySourceCardState();
-}
-
-class _BySourceCardState extends State<_BySourceCard> {
-  static const _bar = Color(0xFF2A78D6); // checked with the dataviz validator
-  static const _noSourceBar = Color(0xFF9CA3AF);
-  static const _track = Color(0xFFEEF2F7);
-
-  // Which brands are open. By name, so they stay open when new sales
-  // arrive and the card rebuilds.
-  final _open = <String>{};
-
-  @override
-  Widget build(BuildContext context) {
-    final sources = widget.stats.bySource;
-    final total = widget.stats.total;
-    // Bars are scaled to the biggest brand (full width), not to 100% of
-    // sales: small brands stay visible next to one dominant one.
-    final max = sources.fold<int>(0, (m, s) => s.revenue > m ? s.revenue : m);
-
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text('By source', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 2),
-          Text(
-            'Sales ${widget.rangeLabel} · tap a source for its top items',
-            style: const TextStyle(fontSize: 12, color: AppColors.inkSoft),
-          ),
-          const SizedBox(height: 12),
-          for (final s in sources) _row(s, total, max),
-        ],
-      ),
-    );
-  }
-
-  Widget _row(SourceTotal s, int total, int max) {
-    final key = s.name ?? '';
-    final isOpen = _open.contains(key);
-    final pct = total == 0 ? 0 : (s.revenue * 100 / total).round();
-    final share = max == 0 ? 0.0 : s.revenue / max;
-    final label = s.name ?? 'No source';
-
-    return InkWell(
-      borderRadius: BorderRadius.circular(8),
-      onTap: () => setState(() => isOpen ? _open.remove(key) : _open.add(key)),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Icon(isOpen ? Icons.expand_more : Icons.chevron_right, size: 18, color: AppColors.inkSoft),
-                const SizedBox(width: 2),
-                Expanded(
-                  child: Text.rich(
-                    TextSpan(
-                      children: [
-                        TextSpan(text: label, style: const TextStyle(fontWeight: FontWeight.w600)),
-                        TextSpan(text: '  $pct%', style: const TextStyle(fontSize: 12, color: AppColors.inkSoft)),
-                      ],
-                    ),
-                  ),
-                ),
-                // Values in ink, never the bar colour (text stays readable).
-                Text(ksh(s.revenue), style: AppTheme.mono(size: 15)),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Semantics(
-              label: '$label ${ksh(s.revenue)}, $pct percent of sales',
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: Container(
-                  height: 10,
-                  color: _track,
-                  alignment: Alignment.centerLeft,
-                  child: FractionallySizedBox(
-                    widthFactor: share.clamp(0.0, 1.0),
-                    heightFactor: 1,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: s.name == null ? _noSourceBar : _bar,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            if (isOpen) ...[
-              const SizedBox(height: 6),
-              for (final i in s.topItems())
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 3, 0, 3),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text.rich(
-                          TextSpan(
-                            children: [
-                              TextSpan(text: i.name),
-                              TextSpan(
-                                text: ' · ${countOf(i.qty, unit: i.unit, word: i.word)}',
-                                style: const TextStyle(fontSize: 12, color: AppColors.inkSoft),
-                              ),
-                            ],
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      Text(kes(i.revenue), style: AppTheme.mono(size: 13, weight: FontWeight.w500)),
-                    ],
-                  ),
-                ),
-              if (s.itemCount > 3)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 2, 0, 0),
-                  child: Text(
-                    '+ ${s.itemCount - 3} more ${s.itemCount - 3 == 1 ? 'item' : 'items'}',
-                    style: const TextStyle(fontSize: 12, color: AppColors.inkSoft),
-                  ),
-                ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _TopItemsCard extends StatelessWidget {
-  const _TopItemsCard({required this.stats});
-
-  final DashboardStats stats;
-
-  @override
-  Widget build(BuildContext context) {
-    final items = stats.topItems();
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text('Top items', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 2),
-          const Text('By money taken', style: TextStyle(fontSize: 12, color: AppColors.inkSoft)),
-          const SizedBox(height: 10),
-          for (final i in items)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(i.name),
-                        Text(
-                          i.unit == 'kg' ? '${qty(i.qty)} kg sold' : '${qty(i.qty)} sold',
-                          style: const TextStyle(fontSize: 12, color: AppColors.inkSoft),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Text(ksh(i.revenue), style: AppTheme.mono(size: 15)),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-// -------------------------------------------------------------------------
-// Shared bits
-// -------------------------------------------------------------------------
-
-class _Card extends StatelessWidget {
-  const _Card({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: child,
-    );
-  }
-}
-
-class _MenuTile extends StatelessWidget {
-  const _MenuTile({required this.icon, required this.title, required this.subtitle, required this.onTap});
+  /// The analytics tiles: white with a plum border, like the Sales card,
+  /// so the "look at me" tiles stand apart from plain menu tiles.
+  const _GridTile.featured({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  })  : bg = null,
+        fg = null,
+        button = null,
+        highlight = true;
 
   final IconData icon;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
 
+  /// Status colours (the plan tile). Null = the normal menu look.
+  final Color? bg;
+  final Color? fg;
+
+  /// A small solid label like "Pay now". Not a separate button: the
+  /// whole tile is the tap target, this just says what the tap does.
+  final String? button;
+  final bool highlight;
+
   @override
   Widget build(BuildContext context) {
-    return Card(
-      elevation: 0,
-      margin: const EdgeInsets.only(bottom: 10),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: const BorderSide(color: AppColors.border),
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        leading: Icon(icon, color: AppColors.primary),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: Text(subtitle),
-        trailing: const Icon(Icons.chevron_right),
+    final coloured = fg != null;
+    final ink = fg ?? AppColors.ink;
+    final soft = fg ?? AppColors.inkSoft;
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(14),
+      side: highlight
+          ? const BorderSide(color: AppColors.primary, width: 2)
+          : BorderSide(color: coloured ? fg!.withValues(alpha: 0.35) : AppColors.border, width: coloured ? 1.5 : 1),
+    );
+
+    return Material(
+      color: bg ?? (highlight ? AppColors.surface : AppColors.surfaceMuted),
+      shape: shape,
+      child: InkWell(
+        customBorder: shape,
         onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _IconBox(icon: icon, color: fg, onColour: coloured),
+                  const Spacer(),
+                  Icon(Icons.chevron_right, color: soft),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink)),
+              const SizedBox(height: 2),
+              Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.5, color: soft)),
+              if (button != null) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(color: fg, borderRadius: BorderRadius.circular(8)),
+                  child: Text(
+                    button!,
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.white),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
+    );
+  }
+}
+
+class _IconBox extends StatelessWidget {
+  const _IconBox({required this.icon, this.color, this.onColour = false});
+
+  final IconData icon;
+  final Color? color;
+
+  /// On a coloured tile the box goes white, so the icon still pops.
+  final bool onColour;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        color: onColour ? Colors.white : AppColors.primaryTint,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(icon, size: 20, color: color ?? AppColors.primary),
     );
   }
 }

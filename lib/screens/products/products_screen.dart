@@ -36,11 +36,22 @@ enum _Sort {
   final String short;
 }
 
+enum _Only { out, low }
+
+/// Out = nothing left. Running low = some left, at or below its warning
+/// level. Kept apart so the red "out" list is the urgent one; the same
+/// rules are used on the Inventory page and in the drawer.
+bool _isOut(Product p) => p.active && p.stock <= 0;
+bool _isRunningLow(Product p) => p.active && p.stock > 0 && p.stock <= p.lowStockAt;
+
+const _redBg = Color(0xFFFEE4E2);
+
 class _ProductsScreenState extends State<ProductsScreen> {
   static const _sortKey = 'productSort';
 
   final _search = TextEditingController();
-  bool _lowOnly = false;
+  // null = everything, or just the out-of-stock / running-low items.
+  _Only? _only;
   _Sort _sort = _Sort.newest;
 
   @override
@@ -117,7 +128,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
     if (code == null || !mounted) return;
     if (CatalogService.instance.byCode(code) != null) {
       setState(() {
-        _lowOnly = false;
+        _only = null;
         _search.text = code;
       });
       return;
@@ -133,7 +144,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
   List<Product> _filter(List<Product> all) {
     final q = _search.text.trim().toLowerCase();
     final list = all.where((p) {
-      if (_lowOnly && !p.isLow) return false;
+      if (_only == _Only.out && !_isOut(p)) return false;
+      if (_only == _Only.low && !_isRunningLow(p)) return false;
       if (q.isEmpty) return true;
       // Brand too, so typing "FCL" lists every FCL product.
       return p.name.toLowerCase().contains(q) ||
@@ -204,6 +216,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
         builder: (context, _) {
           final shown = _filter(catalog.products);
           final activeCount = catalog.products.where((p) => p.active).length;
+          final outCount = catalog.products.where(_isOut).length;
+          final lowCount = catalog.products.where(_isRunningLow).length;
 
           return Column(
             children: [
@@ -233,20 +247,43 @@ class _ProductsScreenState extends State<ProductsScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: Row(
                   children: [
-                    FilterChip(
-                      label: Text('Low stock (${catalog.lowCount})'),
-                      selected: _lowOnly,
-                      onSelected: (v) => setState(() => _lowOnly = v),
-                      selectedColor: AppColors.warningBg,
-                      checkmarkColor: AppColors.warning,
-                    ),
-                    const SizedBox(width: 12),
+                    // Scrolls sideways on narrow phones rather than squashing
+                    // the sort button.
                     Expanded(
-                      child: Text(
-                        '${shown.length} of $activeCount',
-                        style: const TextStyle(color: AppColors.inkSoft),
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            FilterChip(
+                              label: Text('Out of stock ($outCount)'),
+                              selected: _only == _Only.out,
+                              onSelected: (v) => setState(() => _only = v ? _Only.out : null),
+                              showCheckmark: false,
+                              selectedColor: _redBg,
+                              labelStyle: TextStyle(
+                                color: outCount > 0 ? AppColors.danger : AppColors.inkSoft,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              side: BorderSide(color: outCount > 0 ? const Color(0xFFFCA5A5) : AppColors.border),
+                            ),
+                            const SizedBox(width: 8),
+                            FilterChip(
+                              label: Text('Low ($lowCount)'),
+                              selected: _only == _Only.low,
+                              onSelected: (v) => setState(() => _only = v ? _Only.low : null),
+                              showCheckmark: false,
+                              selectedColor: AppColors.warningBg,
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              '${shown.length} of $activeCount',
+                              style: const TextStyle(color: AppColors.inkSoft),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
+                    const SizedBox(width: 8),
                     PopupMenuButton<_Sort>(
                       tooltip: 'Sort products',
                       initialValue: _sort,
@@ -367,6 +404,10 @@ class _ProductRow extends StatelessWidget {
                   const SizedBox(height: 4),
                   if (!p.active)
                     const _Tag(text: 'Hidden', fg: AppColors.inkSoft, bg: AppColors.surfaceMuted)
+                  // Red and worded for out, amber with a count for low:
+                  // "Out of stock" must not look like just another low item.
+                  else if (_isOut(p))
+                    const _Tag(text: 'Out of stock', fg: AppColors.danger, bg: _redBg)
                   else if (p.isLow)
                     _Tag(text: '${p.stockText} left', fg: AppColors.warning, bg: AppColors.warningBg)
                   else
